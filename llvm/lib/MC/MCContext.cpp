@@ -7,7 +7,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/MC/MCContext.h"
-#include "llvm/ADT/DenseMapInfo.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
@@ -45,6 +44,7 @@
 #include "llvm/MC/SectionKind.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/EndianStream.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
@@ -74,6 +74,7 @@ MCContext::MCContext(const Triple &TheTriple, const MCAsmInfo *mai,
       InlineAsmUsedLabelNames(Allocator),
       CurrentDwarfLoc(0, 0, 0, DWARF2_FLAG_IS_STMT, 0, 0),
       AutoReset(DoAutoReset), TargetOptions(TargetOpts) {
+  SaveTempLabels = TargetOptions && TargetOptions->MCSaveTempLabels;
   SecureLogFile = TargetOptions ? TargetOptions->AsSecureLogFile : "";
 
   if (SrcMgr && SrcMgr->getNumBuffers())
@@ -148,6 +149,7 @@ void MCContext::reset() {
   XCOFFAllocator.DestroyAll();
   MCInstAllocator.DestroyAll();
   SPIRVAllocator.DestroyAll();
+  WasmSignatureAllocator.DestroyAll();
 
   MCSubtargetAllocator.DestroyAll();
   InlineAsmUsedLabelNames.clear();
@@ -178,7 +180,6 @@ void MCContext::reset() {
   ELFSeenGenericMergeableSections.clear();
 
   NextID.clear();
-  AllowTemporaryLabels = true;
   DwarfLocSeen = false;
   GenDwarfForAssembly = false;
   GenDwarfFileNumber = 0;
@@ -192,6 +193,15 @@ void MCContext::reset() {
 
 MCInst *MCContext::createMCInst() {
   return new (MCInstAllocator.Allocate()) MCInst;
+}
+
+// Allocate the initial MCDataFragment for the begin symbol.
+MCDataFragment *MCContext::allocInitialFragment(MCSection &Sec) {
+  assert(!Sec.curFragList()->Head);
+  auto *F = allocFragment<MCDataFragment>();
+  F->setParent(&Sec);
+  Sec.addFragment(*F);
+  return F;
 }
 
 //===----------------------------------------------------------------------===//
@@ -264,15 +274,11 @@ MCSymbol *MCContext::createSymbolImpl(const StringMapEntry<bool> *Name,
 }
 
 MCSymbol *MCContext::createSymbol(StringRef Name, bool AlwaysAddSuffix,
-                                  bool CanBeUnnamed) {
-  if (CanBeUnnamed && !UseNamesOnTempLabels)
-    return createSymbolImpl(nullptr, true);
-
+                                  bool IsTemporary) {
   // Determine whether this is a user written assembler temporary or normal
   // label, if used.
-  bool IsTemporary = CanBeUnnamed;
-  if (AllowTemporaryLabels && !IsTemporary)
-    IsTemporary = Name.startswith(MAI->getPrivateGlobalPrefix());
+  if (!SaveTempLabels && !IsTemporary)
+    IsTemporary = Name.starts_with(MAI->getPrivateGlobalPrefix());
 
   SmallString<128> NewName = Name;
   bool AddSuffix = AlwaysAddSuffix;
@@ -298,6 +304,9 @@ MCSymbol *MCContext::createSymbol(StringRef Name, bool AlwaysAddSuffix,
 }
 
 MCSymbol *MCContext::createTempSymbol(const Twine &Name, bool AlwaysAddSuffix) {
+  if (!UseNamesOnTempLabels)
+    return createSymbolImpl(nullptr, /*IsTemporary=*/true);
+
   SmallString<128> NameSV;
   raw_svector_ostream(NameSV) << MAI->getPrivateGlobalPrefix() << Name;
   return createSymbol(NameSV, AlwaysAddSuffix, true);
@@ -376,6 +385,10 @@ void MCContext::registerInlineAsmLabel(MCSymbol *Sym) {
   InlineAsmUsedLabelNames[Sym->getName()] = Sym;
 }
 
+wasm::WasmSignature *MCContext::createWasmSignature() {
+  return new (WasmSignatureAllocator.Allocate()) wasm::WasmSignature;
+}
+
 MCSymbolXCOFF *
 MCContext::createXCOFFSymbolImpl(const StringMapEntry<bool> *Name,
                                  bool IsTemporary) {
@@ -383,8 +396,8 @@ MCContext::createXCOFFSymbolImpl(const StringMapEntry<bool> *Name,
     return new (nullptr, *this) MCSymbolXCOFF(nullptr, IsTemporary);
 
   StringRef OriginalName = Name->first();
-  if (OriginalName.startswith("._Renamed..") ||
-      OriginalName.startswith("_Renamed.."))
+  if (OriginalName.starts_with("._Renamed..") ||
+      OriginalName.starts_with("_Renamed.."))
     reportError(SMLoc(), "invalid symbol name from source");
 
   if (MAI->isValidUnquotedName(OriginalName))
@@ -398,7 +411,7 @@ MCContext::createXCOFFSymbolImpl(const StringMapEntry<bool> *Name,
   // If it's an entry point symbol, we will keep the '.'
   // in front for the convention purpose. Otherwise, add "_Renamed.."
   // as prefix to signal this is an renamed symbol.
-  const bool IsEntryPoint = !InvalidName.empty() && InvalidName[0] == '.';
+  const bool IsEntryPoint = InvalidName.starts_with(".");
   SmallString<128> ValidName =
       StringRef(IsEntryPoint ? "._Renamed.." : "_Renamed..");
 
@@ -493,11 +506,8 @@ MCSectionELF *MCContext::createELFSectionImpl(StringRef Section, unsigned Type,
       MCSectionELF(Section, Type, Flags, K, EntrySize, Group, Comdat, UniqueID,
                    R, LinkedToSym);
 
-  auto *F = new MCDataFragment();
-  Ret->getFragmentList().insert(Ret->begin(), F);
-  F->setParent(Ret);
+  auto *F = allocInitialFragment(*Ret);
   R->setFragment(F);
-
   return Ret;
 }
 
@@ -544,16 +554,42 @@ MCSectionELF *MCContext::getELFSection(const Twine &Section, unsigned Type,
   if (GroupSym)
     Group = GroupSym->getName();
   assert(!(LinkedToSym && LinkedToSym->getName().empty()));
-  // Do the lookup, if we have a hit, return it.
-  auto IterBool = ELFUniquingMap.insert(std::make_pair(
-      ELFSectionKey{Section.str(), Group,
-                    LinkedToSym ? LinkedToSym->getName() : "", UniqueID},
-      nullptr));
-  auto &Entry = *IterBool.first;
-  if (!IterBool.second)
-    return Entry.second;
 
-  StringRef CachedName = Entry.first.SectionName;
+  // Sections are differentiated by the quadruple (section_name, group_name,
+  // unique_id, link_to_symbol_name). Sections sharing the same quadruple are
+  // combined into one section. As an optimization, non-unique sections without
+  // group or linked-to symbol have a shorter unique-ing key.
+  std::pair<StringMap<MCSectionELF *>::iterator, bool> EntryNewPair;
+  // Length of the section name, which are the first SectionLen bytes of the key
+  unsigned SectionLen;
+  if (GroupSym || LinkedToSym || UniqueID != MCSection::NonUniqueID) {
+    SmallString<128> Buffer;
+    Section.toVector(Buffer);
+    SectionLen = Buffer.size();
+    Buffer.push_back(0); // separator which cannot occur in the name
+    if (GroupSym)
+      Buffer.append(GroupSym->getName());
+    Buffer.push_back(0); // separator which cannot occur in the name
+    if (LinkedToSym)
+      Buffer.append(LinkedToSym->getName());
+    support::endian::write(Buffer, UniqueID, endianness::native);
+    StringRef UniqueMapKey = StringRef(Buffer);
+    EntryNewPair = ELFUniquingMap.insert(std::make_pair(UniqueMapKey, nullptr));
+  } else if (!Section.isSingleStringRef()) {
+    SmallString<128> Buffer;
+    StringRef UniqueMapKey = Section.toStringRef(Buffer);
+    SectionLen = UniqueMapKey.size();
+    EntryNewPair = ELFUniquingMap.insert(std::make_pair(UniqueMapKey, nullptr));
+  } else {
+    StringRef UniqueMapKey = Section.getSingleStringRef();
+    SectionLen = UniqueMapKey.size();
+    EntryNewPair = ELFUniquingMap.insert(std::make_pair(UniqueMapKey, nullptr));
+  }
+
+  if (!EntryNewPair.second)
+    return EntryNewPair.first->second;
+
+  StringRef CachedName = EntryNewPair.first->getKey().take_front(SectionLen);
 
   SectionKind Kind;
   if (Flags & ELF::SHF_ARM_PURECODE)
@@ -597,7 +633,7 @@ MCSectionELF *MCContext::getELFSection(const Twine &Section, unsigned Type,
   MCSectionELF *Result =
       createELFSectionImpl(CachedName, Type, Flags, Kind, EntrySize, GroupSym,
                            IsComdat, UniqueID, LinkedToSym);
-  Entry.second = Result;
+  EntryNewPair.first->second = Result;
 
   recordELFMergeableSectionInfo(Result->getName(), Result->getFlags(),
                                 Result->getUniqueID(), Result->getEntrySize());
@@ -616,21 +652,26 @@ void MCContext::recordELFMergeableSectionInfo(StringRef SectionName,
                                               unsigned Flags, unsigned UniqueID,
                                               unsigned EntrySize) {
   bool IsMergeable = Flags & ELF::SHF_MERGE;
-  if (UniqueID == GenericSectionID)
+  if (UniqueID == GenericSectionID) {
     ELFSeenGenericMergeableSections.insert(SectionName);
+    // Minor performance optimization: avoid hash map lookup in
+    // isELFGenericMergeableSection, which will return true for SectionName.
+    IsMergeable = true;
+  }
 
   // For mergeable sections or non-mergeable sections with a generic mergeable
   // section name we enter their Unique ID into the ELFEntrySizeMap so that
   // compatible globals can be assigned to the same section.
+
   if (IsMergeable || isELFGenericMergeableSection(SectionName)) {
     ELFEntrySizeMap.insert(std::make_pair(
-        ELFEntrySizeKey{SectionName, Flags, EntrySize}, UniqueID));
+        std::make_tuple(SectionName, Flags, EntrySize), UniqueID));
   }
 }
 
 bool MCContext::isELFImplicitMergeableSectionNamePrefix(StringRef SectionName) {
-  return SectionName.startswith(".rodata.str") ||
-         SectionName.startswith(".rodata.cst");
+  return SectionName.starts_with(".rodata.str") ||
+         SectionName.starts_with(".rodata.cst");
 }
 
 bool MCContext::isELFGenericMergeableSection(StringRef SectionName) {
@@ -641,8 +682,7 @@ bool MCContext::isELFGenericMergeableSection(StringRef SectionName) {
 std::optional<unsigned>
 MCContext::getELFUniqueIDForEntsize(StringRef SectionName, unsigned Flags,
                                     unsigned EntrySize) {
-  auto I = ELFEntrySizeMap.find(
-      MCContext::ELFEntrySizeKey{SectionName, Flags, EntrySize});
+  auto I = ELFEntrySizeMap.find(std::make_tuple(SectionName, Flags, EntrySize));
   return (I != ELFEntrySizeMap.end()) ? std::optional<unsigned>(I->second)
                                       : std::nullopt;
 }
@@ -651,10 +691,16 @@ MCSectionGOFF *MCContext::getGOFFSection(StringRef Section, SectionKind Kind,
                                          MCSection *Parent,
                                          const MCExpr *SubsectionId) {
   // Do the lookup. If we don't have a hit, return a new section.
-  auto &GOFFSection = GOFFUniquingMap[Section.str()];
-  if (!GOFFSection)
-    GOFFSection = new (GOFFAllocator.Allocate())
-        MCSectionGOFF(Section, Kind, Parent, SubsectionId);
+  auto IterBool =
+      GOFFUniquingMap.insert(std::make_pair(Section.str(), nullptr));
+  auto Iter = IterBool.first;
+  if (!IterBool.second)
+    return Iter->second;
+
+  StringRef CachedName = Iter->first;
+  MCSectionGOFF *GOFFSection = new (GOFFAllocator.Allocate())
+      MCSectionGOFF(CachedName, Kind, Parent, SubsectionId);
+  Iter->second = GOFFSection;
 
   return GOFFSection;
 }
@@ -757,11 +803,8 @@ MCSectionWasm *MCContext::getWasmSection(const Twine &Section, SectionKind Kind,
       MCSectionWasm(CachedName, Kind, Flags, GroupSym, UniqueID, Begin);
   Entry.second = Result;
 
-  auto *F = new MCDataFragment();
-  Result->getFragmentList().insert(Result->begin(), F);
-  F->setParent(Result);
+  auto *F = allocInitialFragment(*Result);
   Begin->setFragment(F);
-
   return Result;
 }
 
@@ -823,10 +866,7 @@ MCSectionXCOFF *MCContext::getXCOFFSection(
 
   Entry.second = Result;
 
-  auto *F = new MCDataFragment();
-  Result->getFragmentList().insert(Result->begin(), F);
-  F->setParent(Result);
-
+  auto *F = allocInitialFragment(*Result);
   if (Begin)
     Begin->setFragment(F);
 
@@ -846,10 +886,7 @@ MCSectionSPIRV *MCContext::getSPIRVSection() {
   MCSectionSPIRV *Result = new (SPIRVAllocator.Allocate())
       MCSectionSPIRV(SectionKind::getText(), Begin);
 
-  auto *F = new MCDataFragment();
-  Result->getFragmentList().insert(Result->begin(), F);
-  F->setParent(Result);
-
+  allocInitialFragment(*Result);
   return Result;
 }
 
@@ -869,10 +906,7 @@ MCSectionDXContainer *MCContext::getDXContainerSection(StringRef Section,
       new (DXCAllocator.Allocate()) MCSectionDXContainer(Name, K, nullptr);
 
   // The first fragment will store the header
-  auto *F = new MCDataFragment();
-  MapIt->second->getFragmentList().insert(MapIt->second->begin(), F);
-  F->setParent(MapIt->second);
-
+  allocInitialFragment(*MapIt->second);
   return MapIt->second;
 }
 
@@ -1003,7 +1037,7 @@ void MCContext::finalizeDwarfSections(MCStreamer &MCOS) {
 
 CodeViewContext &MCContext::getCVContext() {
   if (!CVContext)
-    CVContext.reset(new CodeViewContext);
+    CVContext.reset(new CodeViewContext(this));
   return *CVContext;
 }
 

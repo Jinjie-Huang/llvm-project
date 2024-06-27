@@ -194,6 +194,7 @@ private:
 
 void BinaryEmitter::emitAll(StringRef OrgSecPrefix) {
   Streamer.initSections(false, *BC.STI);
+  Streamer.setUseAssemblerInfoForParsing(false);
 
   if (opts::UpdateDebugSections && BC.isELF()) {
     // Force the emission of debug line info into allocatable section to ensure
@@ -226,6 +227,7 @@ void BinaryEmitter::emitAll(StringRef OrgSecPrefix) {
   // TODO Enable for Mach-O once BinaryContext::getDataSection supports it.
   if (BC.isELF())
     AddressMap::emit(Streamer, BC);
+  Streamer.setUseAssemblerInfoForParsing(true);
 }
 
 void BinaryEmitter::emitFunctions() {
@@ -287,7 +289,10 @@ void BinaryEmitter::emitFunctions() {
 
   // Mark the end of hot text.
   if (opts::HotText) {
-    Streamer.switchSection(BC.getTextSection());
+    if (BC.HasWarmSection)
+      Streamer.switchSection(BC.getCodeSection(BC.getWarmCodeSectionName()));
+    else
+      Streamer.switchSection(BC.getTextSection());
     Streamer.emitLabel(BC.getHotTextEndSymbol());
   }
 }
@@ -486,7 +491,7 @@ void BinaryEmitter::emitFunctionBody(BinaryFunction &BF, FunctionFragment &FF,
 
       if (!EmitCodeOnly) {
         // A symbol to be emitted before the instruction to mark its location.
-        MCSymbol *InstrLabel = BC.MIB->getLabel(Instr);
+        MCSymbol *InstrLabel = BC.MIB->getInstLabel(Instr);
 
         if (opts::UpdateDebugSections && BF.getDWARFUnit()) {
           LastLocSeen = emitLineInfo(BF, Instr.getLoc(), LastLocSeen,
@@ -505,6 +510,18 @@ void BinaryEmitter::emitFunctionBody(BinaryFunction &BF, FunctionFragment &FF,
 
         if (InstrLabel)
           Streamer.emitLabel(InstrLabel);
+      }
+
+      // Emit sized NOPs via MCAsmBackend::writeNopData() interface on x86.
+      // This is a workaround for invalid NOPs handling by asm/disasm layer.
+      if (BC.isX86() && BC.MIB->isNoop(Instr)) {
+        if (std::optional<uint32_t> Size = BC.MIB->getSize(Instr)) {
+          SmallString<15> Code;
+          raw_svector_ostream VecOS(Code);
+          BC.MAB->writeNopData(VecOS, *Size, BC.STI.get());
+          Streamer.emitBytes(Code);
+          continue;
+        }
       }
 
       Streamer.emitInstruction(Instr, *BC.STI);
@@ -552,7 +569,8 @@ void BinaryEmitter::emitConstantIslands(BinaryFunction &BF, bool EmitColdPart,
       BF.getAddress() - BF.getOriginSection()->getAddress(), BF.getMaxSize());
 
   if (opts::Verbosity && !OnBehalfOf)
-    outs() << "BOLT-INFO: emitting constant island for function " << BF << "\n";
+    BC.outs() << "BOLT-INFO: emitting constant island for function " << BF
+              << "\n";
 
   // We split the island into smaller blocks and output labels between them.
   auto IS = Islands.Offsets.begin();
@@ -751,7 +769,7 @@ void BinaryEmitter::emitJumpTables(const BinaryFunction &BF) {
     return;
 
   if (opts::PrintJumpTables)
-    outs() << "BOLT-INFO: jump tables for function " << BF << ":\n";
+    BC.outs() << "BOLT-INFO: jump tables for function " << BF << ":\n";
 
   for (auto &JTI : BF.jumpTables()) {
     JumpTable &JT = *JTI.second;
@@ -759,7 +777,7 @@ void BinaryEmitter::emitJumpTables(const BinaryFunction &BF) {
     if (JT.Parents.size() > 1 && JT.Parents[0] != &BF)
       continue;
     if (opts::PrintJumpTables)
-      JT.print(outs());
+      JT.print(BC.outs());
     if (opts::JumpTables == JTS_BASIC && BC.HasRelocations) {
       JT.updateOriginal();
     } else {
@@ -797,7 +815,9 @@ void BinaryEmitter::emitJumpTable(const JumpTable &JT, MCSection *HotSection,
   // determining its destination.
   std::map<MCSymbol *, uint64_t> LabelCounts;
   if (opts::JumpTables > JTS_SPLIT && !JT.Counts.empty()) {
-    MCSymbol *CurrentLabel = JT.Labels.at(0);
+    auto It = JT.Labels.find(0);
+    assert(It != JT.Labels.end());
+    MCSymbol *CurrentLabel = It->second;
     uint64_t CurrentLabelCount = 0;
     for (unsigned Index = 0; Index < JT.Entries.size(); ++Index) {
       auto LI = JT.Labels.find(Index * JT.EntrySize);

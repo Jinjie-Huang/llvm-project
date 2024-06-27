@@ -118,7 +118,7 @@ public:
     /// of header files.
     ModuleMapModule,
 
-    /// This is a C++ 20 header unit.
+    /// This is a C++20 header unit.
     ModuleHeaderUnit,
 
     /// This is a C++20 module interface unit.
@@ -127,10 +127,10 @@ public:
     /// This is a C++20 module implementation unit.
     ModuleImplementationUnit,
 
-    /// This is a C++ 20 module partition interface.
+    /// This is a C++20 module partition interface.
     ModulePartitionInterface,
 
-    /// This is a C++ 20 module partition implementation.
+    /// This is a C++20 module partition implementation.
     ModulePartitionImplementation,
 
     /// This is the explicit Global Module Fragment of a modular TU.
@@ -156,7 +156,7 @@ public:
   /// The build directory of this module. This is the directory in
   /// which the module is notionally built, and relative to which its headers
   /// are found.
-  OptionalDirectoryEntryRefDegradesToDirectoryEntryPtr Directory;
+  OptionalDirectoryEntryRef Directory;
 
   /// The presumed file name for the module map defining this module.
   /// Only non-empty when building from preprocessed source.
@@ -178,9 +178,11 @@ public:
   /// eventually be exposed, for use in "private" modules.
   std::string ExportAsModule;
 
-  /// Does this Module scope describe part of the purview of a standard named
-  /// C++ module?
-  bool isModulePurview() const {
+  /// For the debug info, the path to this module's .apinotes file, if any.
+  std::string APINotesFile;
+
+  /// Does this Module is a named module of a standard named module?
+  bool isNamedModule() const {
     switch (Kind) {
     case ModuleInterfaceUnit:
     case ModuleImplementationUnit:
@@ -282,9 +284,10 @@ public:
   /// found on the file system.
   SmallVector<UnresolvedHeaderDirective, 1> MissingHeaders;
 
-  /// An individual requirement: a feature name and a flag indicating
-  /// the required state of that feature.
-  using Requirement = std::pair<std::string, bool>;
+  struct Requirement {
+    std::string FeatureName;
+    bool RequiredState;
+  };
 
   /// The set of language features required to use this module.
   ///
@@ -596,6 +599,11 @@ public:
            Kind == ModulePartitionImplementation;
   }
 
+  /// Is this a module partition implementation unit.
+  bool isModulePartitionImplementation() const {
+    return Kind == ModulePartitionImplementation;
+  }
+
   /// Is this a module implementation.
   bool isModuleImplementation() const {
     return Kind == ModuleImplementationUnit;
@@ -670,7 +678,7 @@ public:
   }
 
   /// The serialized AST file for this module, if one was created.
-  OptionalFileEntryRefDegradesToFileEntryPtr getASTFile() const {
+  OptionalFileEntryRef getASTFile() const {
     return getTopLevelModule()->ASTFile;
   }
 
@@ -851,12 +859,6 @@ public:
                   VisibleCallback Vis = [](Module *) {},
                   ConflictCallback Cb = [](ArrayRef<Module *>, Module *,
                                            StringRef) {});
-
-  /// Make transitive imports visible for [module.import]/7.
-  void makeTransitiveImportsVisible(
-      Module *M, SourceLocation Loc, VisibleCallback Vis = [](Module *) {},
-      ConflictCallback Cb = [](ArrayRef<Module *>, Module *, StringRef) {});
-
 private:
   /// Import locations for each visible module. Indexed by the module's
   /// VisibilityID.
@@ -865,32 +867,6 @@ private:
   /// Visibility generation, bumped every time the visibility state changes.
   unsigned Generation = 0;
 };
-
-/// Abstracts clang modules and precompiled header files and holds
-/// everything needed to generate debug info for an imported module
-/// or PCH.
-class ASTSourceDescriptor {
-  StringRef PCHModuleName;
-  StringRef Path;
-  StringRef ASTFile;
-  ASTFileSignature Signature;
-  Module *ClangModule = nullptr;
-
-public:
-  ASTSourceDescriptor() = default;
-  ASTSourceDescriptor(StringRef Name, StringRef Path, StringRef ASTFile,
-                      ASTFileSignature Signature)
-      : PCHModuleName(std::move(Name)), Path(std::move(Path)),
-        ASTFile(std::move(ASTFile)), Signature(Signature) {}
-  ASTSourceDescriptor(Module &M);
-
-  std::string getModuleName() const;
-  StringRef getPath() const { return Path; }
-  StringRef getASTFile() const { return ASTFile; }
-  ASTFileSignature getSignature() const { return Signature; }
-  Module *getModuleOrNull() const { return ClangModule; }
-};
-
 
 } // namespace clang
 

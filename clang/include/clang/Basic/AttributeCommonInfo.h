@@ -52,8 +52,8 @@ public:
     /// Context-sensitive version of a keyword attribute.
     AS_ContextSensitiveKeyword,
 
-    /// <vardecl> : <semantic>
-    AS_HLSLSemantic,
+    /// <vardecl> : <annotation>
+    AS_HLSLAnnotation,
 
     /// The attibute has no source code manifestation and is only created
     /// implicitly.
@@ -120,7 +120,7 @@ public:
     }
     static Form Pragma() { return AS_Pragma; }
     static Form ContextSensitiveKeyword() { return AS_ContextSensitiveKeyword; }
-    static Form HLSLSemantic() { return AS_HLSLSemantic; }
+    static Form HLSLAnnotation() { return AS_HLSLAnnotation; }
     static Form Implicit() { return AS_Implicit; }
 
   private:
@@ -177,6 +177,7 @@ public:
                 IsRegularKeywordAttribute);
   }
   const IdentifierInfo *getAttrName() const { return AttrName; }
+  void setAttrName(const IdentifierInfo *AttrNameII) { AttrName = AttrNameII; }
   SourceLocation getLoc() const { return AttrRange.getBegin(); }
   SourceRange getRange() const { return AttrRange; }
   void setRange(SourceRange R) { AttrRange = R; }
@@ -199,6 +200,15 @@ public:
   bool isCXX11Attribute() const { return SyntaxUsed == AS_CXX11 || IsAlignas; }
 
   bool isC23Attribute() const { return SyntaxUsed == AS_C23; }
+
+  bool isAlignas() const {
+    // FIXME: In the current state, the IsAlignas member variable is only true
+    // with the C++  `alignas` keyword but not `_Alignas`. The following
+    // expression works around the otherwise lost information so it will return
+    // true for `alignas` or `_Alignas` while still returning false for things
+    // like  `__attribute__((aligned))`.
+    return (getParsedKind() == AT_Aligned && isKeywordAttribute());
+  }
 
   /// The attribute is spelled [[]] in either C or C++ mode, including standard
   /// attributes spelled with a keyword, like alignas.
@@ -245,6 +255,19 @@ protected:
     return SpellingIndex != SpellingNotCalculated;
   }
 };
+
+inline bool doesKeywordAttributeTakeArgs(tok::TokenKind Kind) {
+  switch (Kind) {
+  default:
+    return false;
+#define KEYWORD_ATTRIBUTE(NAME, HASARG, ...)                                   \
+  case tok::kw_##NAME:                                                         \
+    return HASARG;
+#include "clang/Basic/RegularKeywordAttrInfo.inc"
+#undef KEYWORD_ATTRIBUTE
+  }
+}
+
 } // namespace clang
 
 #endif // LLVM_CLANG_BASIC_ATTRIBUTECOMMONINFO_H

@@ -173,6 +173,12 @@ def main():
         help="checks filter, when not specified, use clang-tidy " "default",
         default="",
     )
+    parser.add_argument(
+        "-config-file",
+        dest="config_file",
+        help="Specify the path of .clang-tidy or custom config file",
+        default="",
+    )
     parser.add_argument("-use-color", action="store_true", help="Use colors in output")
     parser.add_argument(
         "-path", dest="build_path", help="Path used to read a compile command database."
@@ -236,7 +242,7 @@ def main():
     filename = None
     lines_by_file = {}
     for line in sys.stdin:
-        match = re.search('^\+\+\+\ "?(.*?/){%s}([^ \t\n"]*)' % args.p, line)
+        match = re.search('^\\+\\+\\+\\ "?(.*?/){%s}([^ \t\n"]*)' % args.p, line)
         if match:
             filename = match.group(2)
         if filename is None:
@@ -249,7 +255,7 @@ def main():
             if not re.match("^%s$" % args.iregex, filename, re.IGNORECASE):
                 continue
 
-        match = re.search("^@@.*\+(\d+)(,(\d+))?", line)
+        match = re.search(r"^@@.*\+(\d+)(,(\d+))?", line)
         if match:
             start_line = int(match.group(1))
             line_count = 1
@@ -313,6 +319,8 @@ def main():
         common_clang_tidy_args.append("-fix")
     if args.checks != "":
         common_clang_tidy_args.append("-checks=" + args.checks)
+    if args.config_file != "":
+        common_clang_tidy_args.append("-config-file=" + args.config_file)
     if args.quiet:
         common_clang_tidy_args.append("-quiet")
     if args.build_path is not None:

@@ -284,6 +284,13 @@ public:
   /// The kind of translation unit we are processing.
   const TranslationUnitKind TUKind;
 
+  /// Returns a pointer into the given file's buffer that's guaranteed
+  /// to be between tokens. The returned pointer is always before \p Start.
+  /// The maximum distance betweenthe returned pointer and \p Start is
+  /// limited by a constant value, but also an implementation detail.
+  /// If no such check point exists, \c nullptr is returned.
+  const char *getCheckPoint(FileID FID, const char *Start) const;
+
 private:
   /// The code-completion handler.
   CodeCompletionHandler *CodeComplete = nullptr;
@@ -310,6 +317,9 @@ private:
 
   /// The import path for named module that we're currently processing.
   SmallVector<std::pair<IdentifierInfo *, SourceLocation>, 2> NamedModuleImportPath;
+
+  llvm::DenseMap<FileID, SmallVector<const char *>> CheckPoints;
+  unsigned CheckPointCounter = 0;
 
   /// Whether the import is an `@import` or a standard c++ modules import.
   bool IsAtImport = false;
@@ -826,7 +836,7 @@ private:
     ModuleMacroInfo *getModuleInfo(Preprocessor &PP,
                                    const IdentifierInfo *II) const {
       if (II->isOutOfDate())
-        PP.updateOutOfDateIdentifier(const_cast<IdentifierInfo&>(*II));
+        PP.updateOutOfDateIdentifier(*II);
       // FIXME: Find a spare bit on IdentifierInfo and store a
       //        HasModuleMacros flag.
       if (!II->hasMacroDefinition() ||
@@ -1000,7 +1010,7 @@ private:
   llvm::FoldingSet<ModuleMacro> ModuleMacros;
 
   /// The names of potential module macros that we've not yet processed.
-  llvm::SmallVector<const IdentifierInfo *, 32> PendingModuleMacroNames;
+  llvm::SmallVector<IdentifierInfo *, 32> PendingModuleMacroNames;
 
   /// The list of module macros, for each identifier, that are not overridden by
   /// any other module macro.
@@ -1152,7 +1162,7 @@ private:
   /// skipped.
   llvm::DenseMap<const char *, unsigned> RecordedSkippedRanges;
 
-  void updateOutOfDateIdentifier(IdentifierInfo &II) const;
+  void updateOutOfDateIdentifier(const IdentifierInfo &II) const;
 
 public:
   Preprocessor(std::shared_ptr<PreprocessorOptions> PPOpts,
@@ -1350,7 +1360,7 @@ public:
 
     MacroState &S = CurSubmoduleState->Macros[II];
     auto *MD = S.getLatest();
-    while (MD && isa<VisibilityMacroDirective>(MD))
+    while (isa_and_nonnull<VisibilityMacroDirective>(MD))
       MD = MD->getPrevious();
     return MacroDefinition(dyn_cast_or_null<DefMacroDirective>(MD),
                            S.getActiveModuleMacros(*this, II),
@@ -1422,14 +1432,15 @@ public:
                                MacroDirective *MD);
 
   /// Register an exported macro for a module and identifier.
-  ModuleMacro *addModuleMacro(Module *Mod, IdentifierInfo *II, MacroInfo *Macro,
+  ModuleMacro *addModuleMacro(Module *Mod, IdentifierInfo *II,
+                              MacroInfo *Macro,
                               ArrayRef<ModuleMacro *> Overrides, bool &IsNew);
   ModuleMacro *getModuleMacro(Module *Mod, const IdentifierInfo *II);
 
   /// Get the list of leaf (non-overridden) module macros for a name.
   ArrayRef<ModuleMacro*> getLeafModuleMacros(const IdentifierInfo *II) const {
     if (II->isOutOfDate())
-      updateOutOfDateIdentifier(const_cast<IdentifierInfo&>(*II));
+      updateOutOfDateIdentifier(*II);
     auto I = LeafModuleMacros.find(II);
     if (I != LeafModuleMacros.end())
       return I->second;
@@ -2828,13 +2839,22 @@ public:
     return AnnotationInfos.find(II)->second;
   }
 
-  void emitMacroExpansionWarnings(const Token &Identifier) const {
-    if (Identifier.getIdentifierInfo()->isDeprecatedMacro())
+  void emitMacroExpansionWarnings(const Token &Identifier,
+                                  bool IsIfnDef = false) const {
+    IdentifierInfo *Info = Identifier.getIdentifierInfo();
+    if (Info->isDeprecatedMacro())
       emitMacroDeprecationWarning(Identifier);
 
-    if (Identifier.getIdentifierInfo()->isRestrictExpansion() &&
+    if (Info->isRestrictExpansion() &&
         !SourceMgr.isInMainFile(Identifier.getLocation()))
       emitRestrictExpansionWarning(Identifier);
+
+    if (!IsIfnDef) {
+      if (Info->getName() == "INFINITY" && getLangOpts().NoHonorInfs)
+        emitRestrictInfNaNWarning(Identifier, 0);
+      if (Info->getName() == "NAN" && getLangOpts().NoHonorNaNs)
+        emitRestrictInfNaNWarning(Identifier, 1);
+    }
   }
 
   static void processPathForFileMacro(SmallVectorImpl<char> &Path,
@@ -2850,6 +2870,8 @@ private:
   void emitMacroDeprecationWarning(const Token &Identifier) const;
   void emitRestrictExpansionWarning(const Token &Identifier) const;
   void emitFinalMacroWarning(const Token &Identifier, bool IsUndef) const;
+  void emitRestrictInfNaNWarning(const Token &Identifier,
+                                 unsigned DiagSelection) const;
 
   /// This boolean state keeps track if the current scanned token (by this PP)
   /// is in an "-Wunsafe-buffer-usage" opt-out region. Assuming PP scans a
@@ -2861,11 +2883,41 @@ private:
   /// otherwise.
   SourceLocation CurrentSafeBufferOptOutStart; // It is used to report the start location of an never-closed region.
 
-  // An ordered sequence of "-Wunsafe-buffer-usage" opt-out regions in one
-  // translation unit. Each region is represented by a pair of start and end
-  // locations.  A region is "open" if its' start and end locations are
-  // identical.
-  SmallVector<std::pair<SourceLocation, SourceLocation>, 8> SafeBufferOptOutMap;
+  using SafeBufferOptOutRegionsTy =
+      SmallVector<std::pair<SourceLocation, SourceLocation>, 16>;
+  // An ordered sequence of "-Wunsafe-buffer-usage" opt-out regions in this
+  // translation unit. Each region is represented by a pair of start and
+  // end locations.
+  SafeBufferOptOutRegionsTy SafeBufferOptOutMap;
+
+  // The "-Wunsafe-buffer-usage" opt-out regions in loaded ASTs.  We use the
+  // following structure to manage them by their ASTs.
+  struct {
+    // A map from unique IDs to region maps of loaded ASTs.  The ID identifies a
+    // loaded AST. See `SourceManager::getUniqueLoadedASTID`.
+    llvm::DenseMap<FileID, SafeBufferOptOutRegionsTy> LoadedRegions;
+
+    // Returns a reference to the safe buffer opt-out regions of the loaded
+    // AST where `Loc` belongs to. (Construct if absent)
+    SafeBufferOptOutRegionsTy &
+    findAndConsLoadedOptOutMap(SourceLocation Loc, SourceManager &SrcMgr) {
+      return LoadedRegions[SrcMgr.getUniqueLoadedASTFileID(Loc)];
+    }
+
+    // Returns a reference to the safe buffer opt-out regions of the loaded
+    // AST where `Loc` belongs to. (This const function returns nullptr if
+    // absent.)
+    const SafeBufferOptOutRegionsTy *
+    lookupLoadedOptOutMap(SourceLocation Loc,
+                          const SourceManager &SrcMgr) const {
+      FileID FID = SrcMgr.getUniqueLoadedASTFileID(Loc);
+      auto Iter = LoadedRegions.find(FID);
+
+      if (Iter == LoadedRegions.end())
+        return nullptr;
+      return &Iter->getSecond();
+    }
+  } LoadedSafeBufferOptOutMap;
 
 public:
   /// \return true iff the given `Loc` is in a "-Wunsafe-buffer-usage" opt-out
@@ -2895,6 +2947,18 @@ public:
   /// \return true iff this PP is currently in a "-Wunsafe-buffer-usage"
   ///          opt-out region
   bool isPPInSafeBufferOptOutRegion(SourceLocation &StartLoc);
+
+  /// \return a sequence of SourceLocations representing ordered opt-out regions
+  /// specified by
+  /// `\#pragma clang unsafe_buffer_usage begin/end`s of this translation unit.
+  SmallVector<SourceLocation, 64> serializeSafeBufferOptOutMap() const;
+
+  /// \param SrcLocSeqs a sequence of SourceLocations deserialized from a
+  /// record of code `PP_UNSAFE_BUFFER_USAGE`.
+  /// \return true iff the `Preprocessor` has been updated; false `Preprocessor`
+  /// is same as itself before the call.
+  bool setDeserializedSafeBufferOptOutMap(
+      const SmallVectorImpl<SourceLocation> &SrcLocSeqs);
 
 private:
   /// Helper functions to forward lexing to the actual lexer. They all share the

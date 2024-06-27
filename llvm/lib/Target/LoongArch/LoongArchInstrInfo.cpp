@@ -90,6 +90,14 @@ void LoongArchInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
     Opc = LoongArch::FMOV_S;
   } else if (LoongArch::FPR64RegClass.contains(DstReg, SrcReg)) {
     Opc = LoongArch::FMOV_D;
+  } else if (LoongArch::GPRRegClass.contains(DstReg) &&
+             LoongArch::FPR32RegClass.contains(SrcReg)) {
+    // FPR32 -> GPR copies
+    Opc = LoongArch::MOVFR2GR_S;
+  } else if (LoongArch::GPRRegClass.contains(DstReg) &&
+             LoongArch::FPR64RegClass.contains(SrcReg)) {
+    // FPR64 -> GPR copies
+    Opc = LoongArch::MOVFR2GR_D;
   } else {
     // TODO: support other copies.
     llvm_unreachable("Impossible reg-to-reg copy");
@@ -219,6 +227,21 @@ unsigned LoongArchInstrInfo::getInstSizeInBytes(const MachineInstr &MI) const {
     return getInlineAsmLength(MI.getOperand(0).getSymbolName(), *MAI);
   }
   return MI.getDesc().getSize();
+}
+
+bool LoongArchInstrInfo::isAsCheapAsAMove(const MachineInstr &MI) const {
+  const unsigned Opcode = MI.getOpcode();
+  switch (Opcode) {
+  default:
+    break;
+  case LoongArch::ADDI_D:
+  case LoongArch::ORI:
+  case LoongArch::XORI:
+    return (MI.getOperand(1).isReg() &&
+            MI.getOperand(1).getReg() == LoongArch::R0) ||
+           (MI.getOperand(2).isImm() && MI.getOperand(2).getImm() == 0);
+  }
+  return MI.isAsCheapAsAMove();
 }
 
 MachineBasicBlock *
@@ -522,7 +545,19 @@ LoongArchInstrInfo::getSerializableDirectMachineOperandTargetFlags() const {
       {MO_IE_PC_LO, "loongarch-ie-pc-lo"},
       {MO_IE_PC64_LO, "loongarch-ie-pc64-lo"},
       {MO_IE_PC64_HI, "loongarch-ie-pc64-hi"},
+      {MO_DESC_PC_HI, "loongarch-desc-pc-hi"},
+      {MO_DESC_PC_LO, "loongarch-desc-pc-lo"},
+      {MO_DESC64_PC_LO, "loongarch-desc64-pc-lo"},
+      {MO_DESC64_PC_HI, "loongarch-desc64-pc-hi"},
+      {MO_DESC_LD, "loongarch-desc-ld"},
+      {MO_DESC_CALL, "loongarch-desc-call"},
       {MO_LD_PC_HI, "loongarch-ld-pc-hi"},
       {MO_GD_PC_HI, "loongarch-gd-pc-hi"}};
   return ArrayRef(TargetFlags);
+}
+
+// Returns true if this is the sext.w pattern, addi.w rd, rs, 0.
+bool LoongArch::isSEXT_W(const MachineInstr &MI) {
+  return MI.getOpcode() == LoongArch::ADDI_W && MI.getOperand(1).isReg() &&
+         MI.getOperand(2).isImm() && MI.getOperand(2).getImm() == 0;
 }

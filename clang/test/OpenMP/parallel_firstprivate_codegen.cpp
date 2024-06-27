@@ -258,9 +258,8 @@ void array_func(float a[3], St s[2], int n, long double vla1[n]) {
 // CHECK1-NEXT:    call void @_ZN1SIfEC1Ev(ptr nonnull align 4 dereferenceable(4) [[TEST]])
 // CHECK1-NEXT:    store i32 0, ptr [[T_VAR]], align 4
 // CHECK1-NEXT:    call void @llvm.memcpy.p0.p0.i32(ptr align 4 [[VEC]], ptr align 4 @__const.main.vec, i32 8, i1 false)
-// CHECK1-NEXT:    [[ARRAYINIT_BEGIN:%.*]] = getelementptr inbounds [2 x %struct.S], ptr [[S_ARR]], i32 0, i32 0
-// CHECK1-NEXT:    call void @_ZN1SIfEC1Ef(ptr nonnull align 4 dereferenceable(4) [[ARRAYINIT_BEGIN]], float 1.000000e+00)
-// CHECK1-NEXT:    [[ARRAYINIT_ELEMENT:%.*]] = getelementptr inbounds [[STRUCT_S]], ptr [[ARRAYINIT_BEGIN]], i32 1
+// CHECK1-NEXT:    call void @_ZN1SIfEC1Ef(ptr nonnull align 4 dereferenceable(4) [[S_ARR]], float 1.000000e+00)
+// CHECK1-NEXT:    [[ARRAYINIT_ELEMENT:%.*]] = getelementptr inbounds [[STRUCT_S]], ptr [[S_ARR]], i32 1
 // CHECK1-NEXT:    call void @_ZN1SIfEC1Ef(ptr nonnull align 4 dereferenceable(4) [[ARRAYINIT_ELEMENT]], float 2.000000e+00)
 // CHECK1-NEXT:    call void @_ZN1SIfEC1Ef(ptr nonnull align 4 dereferenceable(4) [[VAR]], float 3.000000e+00)
 // CHECK1-NEXT:    [[TMP0:%.*]] = load i32, ptr [[T_VAR]], align 4
@@ -458,7 +457,7 @@ void array_func(float a[3], St s[2], int n, long double vla1[n]) {
 //
 //
 // CHECK1-LABEL: define {{[^@]+}}@_Z5tmainIiET_v
-// CHECK1-SAME: () #[[ATTR5:[0-9]+]] comdat {
+// CHECK1-SAME: () #[[ATTR1]] comdat {
 // CHECK1-NEXT:  entry:
 // CHECK1-NEXT:    [[RETVAL:%.*]] = alloca i32, align 4
 // CHECK1-NEXT:    [[TEST:%.*]] = alloca [[STRUCT_S_0:%.*]], align 4
@@ -473,9 +472,8 @@ void array_func(float a[3], St s[2], int n, long double vla1[n]) {
 // CHECK1-NEXT:    call void @_ZN3SSTIiEC1Ev(ptr nonnull align 4 dereferenceable(4) [[SST]])
 // CHECK1-NEXT:    store i32 0, ptr [[T_VAR]], align 128
 // CHECK1-NEXT:    call void @llvm.memcpy.p0.p0.i32(ptr align 128 [[VEC]], ptr align 128 @__const._Z5tmainIiET_v.vec, i32 8, i1 false)
-// CHECK1-NEXT:    [[ARRAYINIT_BEGIN:%.*]] = getelementptr inbounds [2 x %struct.S.0], ptr [[S_ARR]], i32 0, i32 0
-// CHECK1-NEXT:    call void @_ZN1SIiEC1Ei(ptr nonnull align 4 dereferenceable(4) [[ARRAYINIT_BEGIN]], i32 1)
-// CHECK1-NEXT:    [[ARRAYINIT_ELEMENT:%.*]] = getelementptr inbounds [[STRUCT_S_0]], ptr [[ARRAYINIT_BEGIN]], i32 1
+// CHECK1-NEXT:    call void @_ZN1SIiEC1Ei(ptr nonnull align 4 dereferenceable(4) [[S_ARR]], i32 1)
+// CHECK1-NEXT:    [[ARRAYINIT_ELEMENT:%.*]] = getelementptr inbounds [[STRUCT_S_0]], ptr [[S_ARR]], i32 1
 // CHECK1-NEXT:    call void @_ZN1SIiEC1Ei(ptr nonnull align 4 dereferenceable(4) [[ARRAYINIT_ELEMENT]], i32 2)
 // CHECK1-NEXT:    call void @_ZN1SIiEC1Ei(ptr nonnull align 4 dereferenceable(4) [[VAR]], i32 3)
 // CHECK1-NEXT:    [[TMP0:%.*]] = load i32, ptr [[T_VAR]], align 128
@@ -999,7 +997,7 @@ void array_func(float a[3], St s[2], int n, long double vla1[n]) {
 //
 //
 // CHECK3-LABEL: define {{[^@]+}}@_ZN2SSC2ERi.omp_outlined
-// CHECK3-SAME: (ptr noalias [[DOTGLOBAL_TID_:%.*]], ptr noalias [[DOTBOUND_TID_:%.*]], ptr [[THIS:%.*]], i32 [[A:%.*]], i32 [[B:%.*]], i32 [[C:%.*]], ptr nonnull align 4 dereferenceable(16) [[E:%.*]]) #[[ATTR3:[0-9]+]] {
+// CHECK3-SAME: (ptr noalias [[DOTGLOBAL_TID_:%.*]], ptr noalias [[DOTBOUND_TID_:%.*]], ptr [[THIS:%.*]], i32 [[A:%.*]], i32 [[B:%.*]], i32 [[C:%.*]], ptr nonnull align 4 dereferenceable(16) [[E:%.*]]) #[[ATTR2:[0-9]+]] {
 // CHECK3-NEXT:  entry:
 // CHECK3-NEXT:    [[DOTGLOBAL_TID__ADDR:%.*]] = alloca ptr, align 4
 // CHECK3-NEXT:    [[DOTBOUND_TID__ADDR:%.*]] = alloca ptr, align 4
@@ -1044,7 +1042,7 @@ void array_func(float a[3], St s[2], int n, long double vla1[n]) {
 //
 //
 // CHECK3-LABEL: define {{[^@]+}}@_ZZN2SSC1ERiENKUlvE_clEv
-// CHECK3-SAME: (ptr nonnull align 4 dereferenceable(16) [[THIS:%.*]]) #[[ATTR2:[0-9]+]] align 2 {
+// CHECK3-SAME: (ptr nonnull align 4 dereferenceable(16) [[THIS:%.*]]) #[[ATTR1]] align 2 {
 // CHECK3-NEXT:  entry:
 // CHECK3-NEXT:    [[THIS_ADDR:%.*]] = alloca ptr, align 4
 // CHECK3-NEXT:    [[A_CASTED:%.*]] = alloca i32, align 4
@@ -1089,7 +1087,7 @@ void array_func(float a[3], St s[2], int n, long double vla1[n]) {
 //
 //
 // CHECK3-LABEL: define {{[^@]+}}@_ZZN2SSC1ERiENKUlvE_clEv.omp_outlined
-// CHECK3-SAME: (ptr noalias [[DOTGLOBAL_TID_:%.*]], ptr noalias [[DOTBOUND_TID_:%.*]], ptr [[THIS:%.*]], i32 [[A:%.*]], i32 [[B:%.*]], i32 [[C:%.*]]) #[[ATTR3]] {
+// CHECK3-SAME: (ptr noalias [[DOTGLOBAL_TID_:%.*]], ptr noalias [[DOTBOUND_TID_:%.*]], ptr [[THIS:%.*]], i32 [[A:%.*]], i32 [[B:%.*]], i32 [[C:%.*]]) #[[ATTR2]] {
 // CHECK3-NEXT:  entry:
 // CHECK3-NEXT:    [[DOTGLOBAL_TID__ADDR:%.*]] = alloca ptr, align 4
 // CHECK3-NEXT:    [[DOTBOUND_TID__ADDR:%.*]] = alloca ptr, align 4
@@ -1163,7 +1161,7 @@ void array_func(float a[3], St s[2], int n, long double vla1[n]) {
 //
 //
 // CHECK4-LABEL: define {{[^@]+}}@__main_block_invoke
-// CHECK4-SAME: (ptr [[DOTBLOCK_DESCRIPTOR:%.*]]) #[[ATTR1]] {
+// CHECK4-SAME: (ptr [[DOTBLOCK_DESCRIPTOR:%.*]]) #[[ATTR2:[0-9]+]] {
 // CHECK4-NEXT:  entry:
 // CHECK4-NEXT:    [[DOTBLOCK_DESCRIPTOR_ADDR:%.*]] = alloca ptr, align 4
 // CHECK4-NEXT:    [[BLOCK_ADDR:%.*]] = alloca ptr, align 4
@@ -1182,7 +1180,7 @@ void array_func(float a[3], St s[2], int n, long double vla1[n]) {
 //
 //
 // CHECK4-LABEL: define {{[^@]+}}@__main_block_invoke.omp_outlined
-// CHECK4-SAME: (ptr noalias [[DOTGLOBAL_TID_:%.*]], ptr noalias [[DOTBOUND_TID_:%.*]], i32 [[G:%.*]], i32 [[SIVAR:%.*]]) #[[ATTR2:[0-9]+]] {
+// CHECK4-SAME: (ptr noalias [[DOTGLOBAL_TID_:%.*]], ptr noalias [[DOTBOUND_TID_:%.*]], i32 [[G:%.*]], i32 [[SIVAR:%.*]]) #[[ATTR3:[0-9]+]] {
 // CHECK4-NEXT:  entry:
 // CHECK4-NEXT:    [[DOTGLOBAL_TID__ADDR:%.*]] = alloca ptr, align 4
 // CHECK4-NEXT:    [[DOTBOUND_TID__ADDR:%.*]] = alloca ptr, align 4
@@ -1218,7 +1216,7 @@ void array_func(float a[3], St s[2], int n, long double vla1[n]) {
 //
 //
 // CHECK4-LABEL: define {{[^@]+}}@g_block_invoke
-// CHECK4-SAME: (ptr [[DOTBLOCK_DESCRIPTOR:%.*]]) #[[ATTR1]] {
+// CHECK4-SAME: (ptr [[DOTBLOCK_DESCRIPTOR:%.*]]) #[[ATTR2]] {
 // CHECK4-NEXT:  entry:
 // CHECK4-NEXT:    [[DOTBLOCK_DESCRIPTOR_ADDR:%.*]] = alloca ptr, align 4
 // CHECK4-NEXT:    [[BLOCK_ADDR:%.*]] = alloca ptr, align 4
@@ -1286,7 +1284,7 @@ void array_func(float a[3], St s[2], int n, long double vla1[n]) {
 //
 //
 // CHECK4-LABEL: define {{[^@]+}}@_ZN2SSC2ERi.omp_outlined
-// CHECK4-SAME: (ptr noalias [[DOTGLOBAL_TID_:%.*]], ptr noalias [[DOTBOUND_TID_:%.*]], ptr [[THIS:%.*]], i32 [[A:%.*]], i32 [[B:%.*]], i32 [[C:%.*]], ptr nonnull align 4 dereferenceable(16) [[E:%.*]]) #[[ATTR2]] {
+// CHECK4-SAME: (ptr noalias [[DOTGLOBAL_TID_:%.*]], ptr noalias [[DOTBOUND_TID_:%.*]], ptr [[THIS:%.*]], i32 [[A:%.*]], i32 [[B:%.*]], i32 [[C:%.*]], ptr nonnull align 4 dereferenceable(16) [[E:%.*]]) #[[ATTR3]] {
 // CHECK4-NEXT:  entry:
 // CHECK4-NEXT:    [[DOTGLOBAL_TID__ADDR:%.*]] = alloca ptr, align 4
 // CHECK4-NEXT:    [[DOTBOUND_TID__ADDR:%.*]] = alloca ptr, align 4
@@ -1344,7 +1342,7 @@ void array_func(float a[3], St s[2], int n, long double vla1[n]) {
 //
 //
 // CHECK4-LABEL: define {{[^@]+}}@g_block_invoke_2
-// CHECK4-SAME: (ptr [[DOTBLOCK_DESCRIPTOR:%.*]]) #[[ATTR1]] {
+// CHECK4-SAME: (ptr [[DOTBLOCK_DESCRIPTOR:%.*]]) #[[ATTR2]] {
 // CHECK4-NEXT:  entry:
 // CHECK4-NEXT:    [[DOTBLOCK_DESCRIPTOR_ADDR:%.*]] = alloca ptr, align 4
 // CHECK4-NEXT:    [[BLOCK_ADDR:%.*]] = alloca ptr, align 4
@@ -1388,7 +1386,7 @@ void array_func(float a[3], St s[2], int n, long double vla1[n]) {
 //
 //
 // CHECK4-LABEL: define {{[^@]+}}@g_block_invoke_2.omp_outlined
-// CHECK4-SAME: (ptr noalias [[DOTGLOBAL_TID_:%.*]], ptr noalias [[DOTBOUND_TID_:%.*]], ptr [[THIS:%.*]], i32 [[A:%.*]], i32 [[B:%.*]], i32 [[C:%.*]]) #[[ATTR2]] {
+// CHECK4-SAME: (ptr noalias [[DOTGLOBAL_TID_:%.*]], ptr noalias [[DOTBOUND_TID_:%.*]], ptr [[THIS:%.*]], i32 [[A:%.*]], i32 [[B:%.*]], i32 [[C:%.*]]) #[[ATTR3]] {
 // CHECK4-NEXT:  entry:
 // CHECK4-NEXT:    [[DOTGLOBAL_TID__ADDR:%.*]] = alloca ptr, align 4
 // CHECK4-NEXT:    [[DOTBOUND_TID__ADDR:%.*]] = alloca ptr, align 4
@@ -1440,9 +1438,8 @@ void array_func(float a[3], St s[2], int n, long double vla1[n]) {
 // CHECK9-NEXT:    call void @_ZN1SIfEC1Ev(ptr nonnull align 4 dereferenceable(4) [[TEST]])
 // CHECK9-NEXT:    store i32 0, ptr [[T_VAR]], align 4
 // CHECK9-NEXT:    call void @llvm.memcpy.p0.p0.i64(ptr align 4 [[VEC]], ptr align 4 @__const.main.vec, i64 8, i1 false)
-// CHECK9-NEXT:    [[ARRAYINIT_BEGIN:%.*]] = getelementptr inbounds [2 x %struct.S], ptr [[S_ARR]], i64 0, i64 0
-// CHECK9-NEXT:    call void @_ZN1SIfEC1Ef(ptr nonnull align 4 dereferenceable(4) [[ARRAYINIT_BEGIN]], float 1.000000e+00)
-// CHECK9-NEXT:    [[ARRAYINIT_ELEMENT:%.*]] = getelementptr inbounds [[STRUCT_S]], ptr [[ARRAYINIT_BEGIN]], i64 1
+// CHECK9-NEXT:    call void @_ZN1SIfEC1Ef(ptr nonnull align 4 dereferenceable(4) [[S_ARR]], float 1.000000e+00)
+// CHECK9-NEXT:    [[ARRAYINIT_ELEMENT:%.*]] = getelementptr inbounds [[STRUCT_S]], ptr [[S_ARR]], i64 1
 // CHECK9-NEXT:    call void @_ZN1SIfEC1Ef(ptr nonnull align 4 dereferenceable(4) [[ARRAYINIT_ELEMENT]], float 2.000000e+00)
 // CHECK9-NEXT:    call void @_ZN1SIfEC1Ef(ptr nonnull align 4 dereferenceable(4) [[VAR]], float 3.000000e+00)
 // CHECK9-NEXT:    [[TMP0:%.*]] = load i32, ptr [[T_VAR]], align 4
@@ -1640,7 +1637,7 @@ void array_func(float a[3], St s[2], int n, long double vla1[n]) {
 //
 //
 // CHECK9-LABEL: define {{[^@]+}}@_Z5tmainIiET_v
-// CHECK9-SAME: () #[[ATTR5:[0-9]+]] comdat {
+// CHECK9-SAME: () #[[ATTR1]] comdat {
 // CHECK9-NEXT:  entry:
 // CHECK9-NEXT:    [[RETVAL:%.*]] = alloca i32, align 4
 // CHECK9-NEXT:    [[TEST:%.*]] = alloca [[STRUCT_S_0:%.*]], align 4
@@ -1655,9 +1652,8 @@ void array_func(float a[3], St s[2], int n, long double vla1[n]) {
 // CHECK9-NEXT:    call void @_ZN3SSTIiEC1Ev(ptr nonnull align 4 dereferenceable(4) [[SST]])
 // CHECK9-NEXT:    store i32 0, ptr [[T_VAR]], align 128
 // CHECK9-NEXT:    call void @llvm.memcpy.p0.p0.i64(ptr align 128 [[VEC]], ptr align 128 @__const._Z5tmainIiET_v.vec, i64 8, i1 false)
-// CHECK9-NEXT:    [[ARRAYINIT_BEGIN:%.*]] = getelementptr inbounds [2 x %struct.S.0], ptr [[S_ARR]], i64 0, i64 0
-// CHECK9-NEXT:    call void @_ZN1SIiEC1Ei(ptr nonnull align 4 dereferenceable(4) [[ARRAYINIT_BEGIN]], i32 1)
-// CHECK9-NEXT:    [[ARRAYINIT_ELEMENT:%.*]] = getelementptr inbounds [[STRUCT_S_0]], ptr [[ARRAYINIT_BEGIN]], i64 1
+// CHECK9-NEXT:    call void @_ZN1SIiEC1Ei(ptr nonnull align 4 dereferenceable(4) [[S_ARR]], i32 1)
+// CHECK9-NEXT:    [[ARRAYINIT_ELEMENT:%.*]] = getelementptr inbounds [[STRUCT_S_0]], ptr [[S_ARR]], i64 1
 // CHECK9-NEXT:    call void @_ZN1SIiEC1Ei(ptr nonnull align 4 dereferenceable(4) [[ARRAYINIT_ELEMENT]], i32 2)
 // CHECK9-NEXT:    call void @_ZN1SIiEC1Ei(ptr nonnull align 4 dereferenceable(4) [[VAR]], i32 3)
 // CHECK9-NEXT:    [[TMP0:%.*]] = load i32, ptr [[T_VAR]], align 128
@@ -2181,7 +2177,7 @@ void array_func(float a[3], St s[2], int n, long double vla1[n]) {
 //
 //
 // CHECK11-LABEL: define {{[^@]+}}@_ZN2SSC2ERi.omp_outlined
-// CHECK11-SAME: (ptr noalias [[DOTGLOBAL_TID_:%.*]], ptr noalias [[DOTBOUND_TID_:%.*]], ptr [[THIS:%.*]], i64 [[A:%.*]], i64 [[B:%.*]], i64 [[C:%.*]], ptr nonnull align 4 dereferenceable(16) [[E:%.*]]) #[[ATTR3:[0-9]+]] {
+// CHECK11-SAME: (ptr noalias [[DOTGLOBAL_TID_:%.*]], ptr noalias [[DOTBOUND_TID_:%.*]], ptr [[THIS:%.*]], i64 [[A:%.*]], i64 [[B:%.*]], i64 [[C:%.*]], ptr nonnull align 4 dereferenceable(16) [[E:%.*]]) #[[ATTR2:[0-9]+]] {
 // CHECK11-NEXT:  entry:
 // CHECK11-NEXT:    [[DOTGLOBAL_TID__ADDR:%.*]] = alloca ptr, align 8
 // CHECK11-NEXT:    [[DOTBOUND_TID__ADDR:%.*]] = alloca ptr, align 8
@@ -2226,7 +2222,7 @@ void array_func(float a[3], St s[2], int n, long double vla1[n]) {
 //
 //
 // CHECK11-LABEL: define {{[^@]+}}@_ZZN2SSC1ERiENKUlvE_clEv
-// CHECK11-SAME: (ptr nonnull align 8 dereferenceable(32) [[THIS:%.*]]) #[[ATTR2:[0-9]+]] align 2 {
+// CHECK11-SAME: (ptr nonnull align 8 dereferenceable(32) [[THIS:%.*]]) #[[ATTR1]] align 2 {
 // CHECK11-NEXT:  entry:
 // CHECK11-NEXT:    [[THIS_ADDR:%.*]] = alloca ptr, align 8
 // CHECK11-NEXT:    [[A_CASTED:%.*]] = alloca i64, align 8
@@ -2271,7 +2267,7 @@ void array_func(float a[3], St s[2], int n, long double vla1[n]) {
 //
 //
 // CHECK11-LABEL: define {{[^@]+}}@_ZZN2SSC1ERiENKUlvE_clEv.omp_outlined
-// CHECK11-SAME: (ptr noalias [[DOTGLOBAL_TID_:%.*]], ptr noalias [[DOTBOUND_TID_:%.*]], ptr [[THIS:%.*]], i64 [[A:%.*]], i64 [[B:%.*]], i64 [[C:%.*]]) #[[ATTR3]] {
+// CHECK11-SAME: (ptr noalias [[DOTGLOBAL_TID_:%.*]], ptr noalias [[DOTBOUND_TID_:%.*]], ptr [[THIS:%.*]], i64 [[A:%.*]], i64 [[B:%.*]], i64 [[C:%.*]]) #[[ATTR2]] {
 // CHECK11-NEXT:  entry:
 // CHECK11-NEXT:    [[DOTGLOBAL_TID__ADDR:%.*]] = alloca ptr, align 8
 // CHECK11-NEXT:    [[DOTBOUND_TID__ADDR:%.*]] = alloca ptr, align 8
@@ -2345,7 +2341,7 @@ void array_func(float a[3], St s[2], int n, long double vla1[n]) {
 //
 //
 // CHECK12-LABEL: define {{[^@]+}}@__main_block_invoke
-// CHECK12-SAME: (ptr [[DOTBLOCK_DESCRIPTOR:%.*]]) #[[ATTR1]] {
+// CHECK12-SAME: (ptr [[DOTBLOCK_DESCRIPTOR:%.*]]) #[[ATTR2:[0-9]+]] {
 // CHECK12-NEXT:  entry:
 // CHECK12-NEXT:    [[DOTBLOCK_DESCRIPTOR_ADDR:%.*]] = alloca ptr, align 8
 // CHECK12-NEXT:    [[BLOCK_ADDR:%.*]] = alloca ptr, align 8
@@ -2364,7 +2360,7 @@ void array_func(float a[3], St s[2], int n, long double vla1[n]) {
 //
 //
 // CHECK12-LABEL: define {{[^@]+}}@__main_block_invoke.omp_outlined
-// CHECK12-SAME: (ptr noalias [[DOTGLOBAL_TID_:%.*]], ptr noalias [[DOTBOUND_TID_:%.*]], i64 [[G:%.*]], i64 [[SIVAR:%.*]]) #[[ATTR2:[0-9]+]] {
+// CHECK12-SAME: (ptr noalias [[DOTGLOBAL_TID_:%.*]], ptr noalias [[DOTBOUND_TID_:%.*]], i64 [[G:%.*]], i64 [[SIVAR:%.*]]) #[[ATTR3:[0-9]+]] {
 // CHECK12-NEXT:  entry:
 // CHECK12-NEXT:    [[DOTGLOBAL_TID__ADDR:%.*]] = alloca ptr, align 8
 // CHECK12-NEXT:    [[DOTBOUND_TID__ADDR:%.*]] = alloca ptr, align 8
@@ -2400,7 +2396,7 @@ void array_func(float a[3], St s[2], int n, long double vla1[n]) {
 //
 //
 // CHECK12-LABEL: define {{[^@]+}}@g_block_invoke
-// CHECK12-SAME: (ptr [[DOTBLOCK_DESCRIPTOR:%.*]]) #[[ATTR1]] {
+// CHECK12-SAME: (ptr [[DOTBLOCK_DESCRIPTOR:%.*]]) #[[ATTR2]] {
 // CHECK12-NEXT:  entry:
 // CHECK12-NEXT:    [[DOTBLOCK_DESCRIPTOR_ADDR:%.*]] = alloca ptr, align 8
 // CHECK12-NEXT:    [[BLOCK_ADDR:%.*]] = alloca ptr, align 8
@@ -2468,7 +2464,7 @@ void array_func(float a[3], St s[2], int n, long double vla1[n]) {
 //
 //
 // CHECK12-LABEL: define {{[^@]+}}@_ZN2SSC2ERi.omp_outlined
-// CHECK12-SAME: (ptr noalias [[DOTGLOBAL_TID_:%.*]], ptr noalias [[DOTBOUND_TID_:%.*]], ptr [[THIS:%.*]], i64 [[A:%.*]], i64 [[B:%.*]], i64 [[C:%.*]], ptr nonnull align 4 dereferenceable(16) [[E:%.*]]) #[[ATTR2]] {
+// CHECK12-SAME: (ptr noalias [[DOTGLOBAL_TID_:%.*]], ptr noalias [[DOTBOUND_TID_:%.*]], ptr [[THIS:%.*]], i64 [[A:%.*]], i64 [[B:%.*]], i64 [[C:%.*]], ptr nonnull align 4 dereferenceable(16) [[E:%.*]]) #[[ATTR3]] {
 // CHECK12-NEXT:  entry:
 // CHECK12-NEXT:    [[DOTGLOBAL_TID__ADDR:%.*]] = alloca ptr, align 8
 // CHECK12-NEXT:    [[DOTBOUND_TID__ADDR:%.*]] = alloca ptr, align 8
@@ -2526,7 +2522,7 @@ void array_func(float a[3], St s[2], int n, long double vla1[n]) {
 //
 //
 // CHECK12-LABEL: define {{[^@]+}}@g_block_invoke_2
-// CHECK12-SAME: (ptr [[DOTBLOCK_DESCRIPTOR:%.*]]) #[[ATTR1]] {
+// CHECK12-SAME: (ptr [[DOTBLOCK_DESCRIPTOR:%.*]]) #[[ATTR2]] {
 // CHECK12-NEXT:  entry:
 // CHECK12-NEXT:    [[DOTBLOCK_DESCRIPTOR_ADDR:%.*]] = alloca ptr, align 8
 // CHECK12-NEXT:    [[BLOCK_ADDR:%.*]] = alloca ptr, align 8
@@ -2570,7 +2566,7 @@ void array_func(float a[3], St s[2], int n, long double vla1[n]) {
 //
 //
 // CHECK12-LABEL: define {{[^@]+}}@g_block_invoke_2.omp_outlined
-// CHECK12-SAME: (ptr noalias [[DOTGLOBAL_TID_:%.*]], ptr noalias [[DOTBOUND_TID_:%.*]], ptr [[THIS:%.*]], i64 [[A:%.*]], i64 [[B:%.*]], i64 [[C:%.*]]) #[[ATTR2]] {
+// CHECK12-SAME: (ptr noalias [[DOTGLOBAL_TID_:%.*]], ptr noalias [[DOTBOUND_TID_:%.*]], ptr [[THIS:%.*]], i64 [[A:%.*]], i64 [[B:%.*]], i64 [[C:%.*]]) #[[ATTR3]] {
 // CHECK12-NEXT:  entry:
 // CHECK12-NEXT:    [[DOTGLOBAL_TID__ADDR:%.*]] = alloca ptr, align 8
 // CHECK12-NEXT:    [[DOTBOUND_TID__ADDR:%.*]] = alloca ptr, align 8

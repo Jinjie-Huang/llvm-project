@@ -20,7 +20,7 @@
     .text
 #endif
 
-#if !defined(__USING_SJLJ_EXCEPTIONS__)
+#if !defined(__USING_SJLJ_EXCEPTIONS__) && !defined(__wasm__)
 
 #if defined(__i386__)
 
@@ -780,7 +780,7 @@ DEFINE_LIBUNWIND_FUNCTION(__unw_getcontext)
 @
 @ On entry:
 @  thread_state pointer is in r0
-@ 
+@
 @ Per EHABI #4.7 this only saves the core integer registers.
 @ EHABI #7.4.5 notes that in general all VRS registers should be restored
 @ however this is very hard to do for VFP registers because it is unknown
@@ -1177,6 +1177,6 @@ DEFINE_LIBUNWIND_FUNCTION(__unw_getcontext)
 
   WEAK_ALIAS(__unw_getcontext, unw_getcontext)
 
-#endif /* !defined(__USING_SJLJ_EXCEPTIONS__) */
+#endif /* !defined(__USING_SJLJ_EXCEPTIONS__) && !defined(__wasm__) */
 
 NO_EXEC_STACK_DIRECTIVE

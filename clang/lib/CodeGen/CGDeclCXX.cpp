@@ -57,7 +57,7 @@ static void EmitDeclInit(CodeGenFunction &CGF, const VarDecl &D,
     return;
   case TEK_Aggregate:
     CGF.EmitAggExpr(Init,
-                    AggValueSlot::forLValue(lv, CGF, AggValueSlot::IsDestructed,
+                    AggValueSlot::forLValue(lv, AggValueSlot::IsDestructed,
                                             AggValueSlot::DoesNotNeedGCBarriers,
                                             AggValueSlot::IsNotAliased,
                                             AggValueSlot::DoesNotOverlap));
@@ -162,7 +162,8 @@ void CodeGenFunction::EmitInvariantStart(llvm::Constant *Addr, CharUnits Size) {
   // Grab the llvm.invariant.start intrinsic.
   llvm::Intrinsic::ID InvStartID = llvm::Intrinsic::invariant_start;
   // Overloaded address space type.
-  llvm::Type *ObjectPtr[1] = {Int8PtrTy};
+  assert(Addr->getType()->isPointerTy() && "Address must be a pointer");
+  llvm::Type *ObjectPtr[1] = {Addr->getType()};
   llvm::Function *InvariantStart = CGM.getIntrinsic(InvStartID, ObjectPtr);
 
   // Emit a call with the size in bytes of the object.
@@ -327,6 +328,15 @@ void CodeGenFunction::registerGlobalDtorWithAtExit(const VarDecl &VD,
   registerGlobalDtorWithAtExit(dtorStub);
 }
 
+/// Register a global destructor using the LLVM 'llvm.global_dtors' global.
+void CodeGenFunction::registerGlobalDtorWithLLVM(const VarDecl &VD,
+                                                 llvm::FunctionCallee Dtor,
+                                                 llvm::Constant *Addr) {
+  // Create a function which calls the destructor.
+  llvm::Function *dtorStub = createAtExitStub(VD, Dtor, Addr);
+  CGM.AddGlobalDtor(dtorStub);
+}
+
 void CodeGenFunction::registerGlobalDtorWithAtExit(llvm::Constant *dtorStub) {
   // extern "C" int atexit(void (*f)(void));
   assert(dtorStub->getType() ==
@@ -467,6 +477,10 @@ llvm::Function *CodeGenModule::CreateGlobalInitOrCleanUpFunction(
       !isInNoSanitizeList(SanitizerKind::Thread, Fn, Loc))
     Fn->addFnAttr(llvm::Attribute::SanitizeThread);
 
+  if (getLangOpts().Sanitize.has(SanitizerKind::NumericalStability) &&
+      !isInNoSanitizeList(SanitizerKind::NumericalStability, Fn, Loc))
+    Fn->addFnAttr(llvm::Attribute::SanitizeNumericalStability);
+
   if (getLangOpts().Sanitize.has(SanitizerKind::Memory) &&
       !isInNoSanitizeList(SanitizerKind::Memory, Fn, Loc))
     Fn->addFnAttr(llvm::Attribute::SanitizeMemory);
@@ -517,10 +531,6 @@ CodeGenModule::EmitCXXGlobalVarDeclInitFunc(const VarDecl *D,
   if (getLangOpts().CUDAIsDevice && !getLangOpts().GPUAllowDeviceInit &&
       (D->hasAttr<CUDADeviceAttr>() || D->hasAttr<CUDAConstantAttr>() ||
        D->hasAttr<CUDASharedAttr>()))
-    return;
-
-  if (getLangOpts().OpenMP &&
-      getOpenMPRuntime().emitDeclareTargetVarDefinition(D, Addr, PerformInit))
     return;
 
   // Check if we've already initialized this decl.

@@ -7,6 +7,7 @@
 
 // UNSUPPORTED: c++03, c++11, c++14, c++17, c++20
 // UNSUPPORTED: no-filesystem
+// UNSUPPORTED: libcpp-has-no-unicode
 // UNSUPPORTED: GCC-ALWAYS_INLINE-FIXME
 
 // XFAIL: availability-fp_to_chars-missing
@@ -35,8 +36,12 @@
 
 int main(int, char**) {
   // The data is passed as-is so it does not depend on the encoding of the input.
-  std::vprint_unicode("{} {} ", std::make_format_args(1234, "一二三四"));
-  std::vprint_unicode("{} {}", std::make_format_args(true, nullptr));
+  int i         = 1234;
+  const char* s = "一二三四";
+  bool b        = true;
+  nullptr_t p   = nullptr;
+  std::vprint_unicode("{} {} ", std::make_format_args(i, s));
+  std::vprint_unicode("{} {}", std::make_format_args(b, p));
 
   return 0;
 }

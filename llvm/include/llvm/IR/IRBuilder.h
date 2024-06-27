@@ -200,6 +200,14 @@ public:
       SetCurrentDebugLocation(IP->getStableDebugLoc());
   }
 
+  /// This specifies that created instructions should be inserted at
+  /// the specified point, but also requires that \p IP is dereferencable.
+  void SetInsertPoint(BasicBlock::iterator IP) {
+    BB = IP->getParent();
+    InsertPt = IP;
+    SetCurrentDebugLocation(IP->getStableDebugLoc());
+  }
+
   /// This specifies that created instructions should inserted at the beginning
   /// end of the specified function, but after already existing static alloca
   /// instructions that are at the start.
@@ -211,6 +219,12 @@ public:
   /// Set location information used by debugging information.
   void SetCurrentDebugLocation(DebugLoc L) {
     AddOrRemoveMetadataToCopy(LLVMContext::MD_dbg, L.getAsMDNode());
+  }
+
+  /// Set nosanitize metadata.
+  void SetNoSanitizeMetadata() {
+    AddOrRemoveMetadataToCopy(llvm::LLVMContext::MD_nosanitize,
+                              llvm::MDNode::get(getContext(), std::nullopt));
   }
 
   /// Collect metadata with IDs \p MetadataKinds from \p Src which should be
@@ -441,7 +455,7 @@ public:
   /// block.
   GlobalVariable *CreateGlobalString(StringRef Str, const Twine &Name = "",
                                      unsigned AddressSpace = 0,
-                                     Module *M = nullptr);
+                                     Module *M = nullptr, bool AddNull = true);
 
   /// Get a constant value representing either true or false.
   ConstantInt *getInt1(bool V) {
@@ -554,11 +568,6 @@ public:
   /// Fetch the type representing a pointer.
   PointerType *getPtrTy(unsigned AddrSpace = 0) {
     return PointerType::get(Context, AddrSpace);
-  }
-
-  /// Fetch the type representing a pointer to an 8-bit integer value.
-  PointerType *getInt8PtrTy(unsigned AddrSpace = 0) {
-    return getPtrTy(AddrSpace);
   }
 
   /// Fetch the type of an integer with size at least as big as that of a
@@ -959,9 +968,9 @@ public:
 
   /// Create a call to intrinsic \p ID with 2 operands which is mangled on the
   /// first type.
-  CallInst *CreateBinaryIntrinsic(Intrinsic::ID ID, Value *LHS, Value *RHS,
-                                  Instruction *FMFSource = nullptr,
-                                  const Twine &Name = "");
+  Value *CreateBinaryIntrinsic(Intrinsic::ID ID, Value *LHS, Value *RHS,
+                               Instruction *FMFSource = nullptr,
+                               const Twine &Name = "");
 
   /// Create a call to intrinsic \p ID with \p Args, mangled using \p Types. If
   /// \p FMFSource is provided, copy fast-math-flags from that instruction to
@@ -980,7 +989,7 @@ public:
                             const Twine &Name = "");
 
   /// Create call to the minnum intrinsic.
-  CallInst *CreateMinNum(Value *LHS, Value *RHS, const Twine &Name = "") {
+  Value *CreateMinNum(Value *LHS, Value *RHS, const Twine &Name = "") {
     if (IsFPConstrained) {
       return CreateConstrainedFPUnroundedBinOp(
           Intrinsic::experimental_constrained_minnum, LHS, RHS, nullptr, Name);
@@ -990,7 +999,7 @@ public:
   }
 
   /// Create call to the maxnum intrinsic.
-  CallInst *CreateMaxNum(Value *LHS, Value *RHS, const Twine &Name = "") {
+  Value *CreateMaxNum(Value *LHS, Value *RHS, const Twine &Name = "") {
     if (IsFPConstrained) {
       return CreateConstrainedFPUnroundedBinOp(
           Intrinsic::experimental_constrained_maxnum, LHS, RHS, nullptr, Name);
@@ -1000,19 +1009,19 @@ public:
   }
 
   /// Create call to the minimum intrinsic.
-  CallInst *CreateMinimum(Value *LHS, Value *RHS, const Twine &Name = "") {
+  Value *CreateMinimum(Value *LHS, Value *RHS, const Twine &Name = "") {
     return CreateBinaryIntrinsic(Intrinsic::minimum, LHS, RHS, nullptr, Name);
   }
 
   /// Create call to the maximum intrinsic.
-  CallInst *CreateMaximum(Value *LHS, Value *RHS, const Twine &Name = "") {
+  Value *CreateMaximum(Value *LHS, Value *RHS, const Twine &Name = "") {
     return CreateBinaryIntrinsic(Intrinsic::maximum, LHS, RHS, nullptr, Name);
   }
 
   /// Create call to the copysign intrinsic.
-  CallInst *CreateCopySign(Value *LHS, Value *RHS,
-                           Instruction *FMFSource = nullptr,
-                           const Twine &Name = "") {
+  Value *CreateCopySign(Value *LHS, Value *RHS,
+                        Instruction *FMFSource = nullptr,
+                        const Twine &Name = "") {
     return CreateBinaryIntrinsic(Intrinsic::copysign, LHS, RHS, FMFSource,
                                  Name);
   }
@@ -1709,18 +1718,13 @@ public:
       const Twine &Name = "", MDNode *FPMathTag = nullptr,
       std::optional<fp::ExceptionBehavior> Except = std::nullopt);
 
-  Value *CreateNeg(Value *V, const Twine &Name = "", bool HasNUW = false,
-                   bool HasNSW = false) {
-    return CreateSub(Constant::getNullValue(V->getType()), V, Name, HasNUW,
-                     HasNSW);
+  Value *CreateNeg(Value *V, const Twine &Name = "", bool HasNSW = false) {
+    return CreateSub(Constant::getNullValue(V->getType()), V, Name,
+                     /*HasNUW=*/0, HasNSW);
   }
 
   Value *CreateNSWNeg(Value *V, const Twine &Name = "") {
-    return CreateNeg(V, Name, false, true);
-  }
-
-  Value *CreateNUWNeg(Value *V, const Twine &Name = "") {
-    return CreateNeg(V, Name, true, false);
+    return CreateNeg(V, Name, /*HasNSW=*/true);
   }
 
   Value *CreateFNeg(Value *V, const Twine &Name = "",
@@ -1860,25 +1864,23 @@ public:
   }
 
   Value *CreateGEP(Type *Ty, Value *Ptr, ArrayRef<Value *> IdxList,
-                   const Twine &Name = "", bool IsInBounds = false) {
-    if (auto *V = Folder.FoldGEP(Ty, Ptr, IdxList, IsInBounds))
+                   const Twine &Name = "",
+                   GEPNoWrapFlags NW = GEPNoWrapFlags::none()) {
+    if (auto *V = Folder.FoldGEP(Ty, Ptr, IdxList, NW))
       return V;
-    return Insert(IsInBounds
-                      ? GetElementPtrInst::CreateInBounds(Ty, Ptr, IdxList)
-                      : GetElementPtrInst::Create(Ty, Ptr, IdxList),
-                  Name);
+    return Insert(GetElementPtrInst::Create(Ty, Ptr, IdxList, NW), Name);
   }
 
   Value *CreateInBoundsGEP(Type *Ty, Value *Ptr, ArrayRef<Value *> IdxList,
                            const Twine &Name = "") {
-    return CreateGEP(Ty, Ptr, IdxList, Name, /* IsInBounds */ true);
+    return CreateGEP(Ty, Ptr, IdxList, Name, GEPNoWrapFlags::inBounds());
   }
 
   Value *CreateConstGEP1_32(Type *Ty, Value *Ptr, unsigned Idx0,
                             const Twine &Name = "") {
     Value *Idx = ConstantInt::get(Type::getInt32Ty(Context), Idx0);
 
-    if (auto *V = Folder.FoldGEP(Ty, Ptr, Idx, /*IsInBounds=*/false))
+    if (auto *V = Folder.FoldGEP(Ty, Ptr, Idx, GEPNoWrapFlags::none()))
       return V;
 
     return Insert(GetElementPtrInst::Create(Ty, Ptr, Idx), Name);
@@ -1888,7 +1890,7 @@ public:
                                     const Twine &Name = "") {
     Value *Idx = ConstantInt::get(Type::getInt32Ty(Context), Idx0);
 
-    if (auto *V = Folder.FoldGEP(Ty, Ptr, Idx, /*IsInBounds=*/true))
+    if (auto *V = Folder.FoldGEP(Ty, Ptr, Idx, GEPNoWrapFlags::inBounds()))
       return V;
 
     return Insert(GetElementPtrInst::CreateInBounds(Ty, Ptr, Idx), Name);
@@ -1901,7 +1903,7 @@ public:
       ConstantInt::get(Type::getInt32Ty(Context), Idx1)
     };
 
-    if (auto *V = Folder.FoldGEP(Ty, Ptr, Idxs, /*IsInBounds=*/false))
+    if (auto *V = Folder.FoldGEP(Ty, Ptr, Idxs, GEPNoWrapFlags::none()))
       return V;
 
     return Insert(GetElementPtrInst::Create(Ty, Ptr, Idxs), Name);
@@ -1914,7 +1916,7 @@ public:
       ConstantInt::get(Type::getInt32Ty(Context), Idx1)
     };
 
-    if (auto *V = Folder.FoldGEP(Ty, Ptr, Idxs, /*IsInBounds=*/true))
+    if (auto *V = Folder.FoldGEP(Ty, Ptr, Idxs, GEPNoWrapFlags::inBounds()))
       return V;
 
     return Insert(GetElementPtrInst::CreateInBounds(Ty, Ptr, Idxs), Name);
@@ -1924,7 +1926,7 @@ public:
                             const Twine &Name = "") {
     Value *Idx = ConstantInt::get(Type::getInt64Ty(Context), Idx0);
 
-    if (auto *V = Folder.FoldGEP(Ty, Ptr, Idx, /*IsInBounds=*/false))
+    if (auto *V = Folder.FoldGEP(Ty, Ptr, Idx, GEPNoWrapFlags::none()))
       return V;
 
     return Insert(GetElementPtrInst::Create(Ty, Ptr, Idx), Name);
@@ -1934,7 +1936,7 @@ public:
                                     const Twine &Name = "") {
     Value *Idx = ConstantInt::get(Type::getInt64Ty(Context), Idx0);
 
-    if (auto *V = Folder.FoldGEP(Ty, Ptr, Idx, /*IsInBounds=*/true))
+    if (auto *V = Folder.FoldGEP(Ty, Ptr, Idx, GEPNoWrapFlags::inBounds()))
       return V;
 
     return Insert(GetElementPtrInst::CreateInBounds(Ty, Ptr, Idx), Name);
@@ -1947,7 +1949,7 @@ public:
       ConstantInt::get(Type::getInt64Ty(Context), Idx1)
     };
 
-    if (auto *V = Folder.FoldGEP(Ty, Ptr, Idxs, /*IsInBounds=*/false))
+    if (auto *V = Folder.FoldGEP(Ty, Ptr, Idxs, GEPNoWrapFlags::none()))
       return V;
 
     return Insert(GetElementPtrInst::Create(Ty, Ptr, Idxs), Name);
@@ -1960,7 +1962,7 @@ public:
       ConstantInt::get(Type::getInt64Ty(Context), Idx1)
     };
 
-    if (auto *V = Folder.FoldGEP(Ty, Ptr, Idxs, /*IsInBounds=*/true))
+    if (auto *V = Folder.FoldGEP(Ty, Ptr, Idxs, GEPNoWrapFlags::inBounds()))
       return V;
 
     return Insert(GetElementPtrInst::CreateInBounds(Ty, Ptr, Idxs), Name);
@@ -1971,6 +1973,17 @@ public:
     return CreateConstInBoundsGEP2_32(Ty, Ptr, 0, Idx, Name);
   }
 
+  Value *CreatePtrAdd(Value *Ptr, Value *Offset, const Twine &Name = "",
+                      GEPNoWrapFlags NW = GEPNoWrapFlags::none()) {
+    return CreateGEP(getInt8Ty(), Ptr, Offset, Name, NW);
+  }
+
+  Value *CreateInBoundsPtrAdd(Value *Ptr, Value *Offset,
+                              const Twine &Name = "") {
+    return CreateGEP(getInt8Ty(), Ptr, Offset, Name,
+                     GEPNoWrapFlags::inBounds());
+  }
+
   /// Same as CreateGlobalString, but return a pointer with "i8*" type
   /// instead of a pointer to array of i8.
   ///
@@ -1978,8 +1991,9 @@ public:
   /// block.
   Constant *CreateGlobalStringPtr(StringRef Str, const Twine &Name = "",
                                   unsigned AddressSpace = 0,
-                                  Module *M = nullptr) {
-    GlobalVariable *GV = CreateGlobalString(Str, Name, AddressSpace, M);
+                                  Module *M = nullptr, bool AddNull = true) {
+    GlobalVariable *GV =
+        CreateGlobalString(Str, Name, AddressSpace, M, AddNull);
     Constant *Zero = ConstantInt::get(Type::getInt32Ty(Context), 0);
     Constant *Indices[] = {Zero, Zero};
     return ConstantExpr::getInBoundsGetElementPtr(GV->getValueType(), GV,
@@ -1990,12 +2004,30 @@ public:
   // Instruction creation methods: Cast/Conversion Operators
   //===--------------------------------------------------------------------===//
 
-  Value *CreateTrunc(Value *V, Type *DestTy, const Twine &Name = "") {
-    return CreateCast(Instruction::Trunc, V, DestTy, Name);
+  Value *CreateTrunc(Value *V, Type *DestTy, const Twine &Name = "",
+                     bool IsNUW = false, bool IsNSW = false) {
+    if (V->getType() == DestTy)
+      return V;
+    if (Value *Folded = Folder.FoldCast(Instruction::Trunc, V, DestTy))
+      return Folded;
+    Instruction *I = CastInst::Create(Instruction::Trunc, V, DestTy);
+    if (IsNUW)
+      I->setHasNoUnsignedWrap();
+    if (IsNSW)
+      I->setHasNoSignedWrap();
+    return Insert(I, Name);
   }
 
-  Value *CreateZExt(Value *V, Type *DestTy, const Twine &Name = "") {
-    return CreateCast(Instruction::ZExt, V, DestTy, Name);
+  Value *CreateZExt(Value *V, Type *DestTy, const Twine &Name = "",
+                    bool IsNonNeg = false) {
+    if (V->getType() == DestTy)
+      return V;
+    if (Value *Folded = Folder.FoldCast(Instruction::ZExt, V, DestTy))
+      return Folded;
+    Instruction *I = Insert(new ZExtInst(V, DestTy), Name);
+    if (IsNonNeg)
+      I->setNonNeg();
+    return I;
   }
 
   Value *CreateSExt(Value *V, Type *DestTy, const Twine &Name = "") {
@@ -2046,11 +2078,17 @@ public:
     return CreateCast(Instruction::FPToSI, V, DestTy, Name);
   }
 
-  Value *CreateUIToFP(Value *V, Type *DestTy, const Twine &Name = ""){
+  Value *CreateUIToFP(Value *V, Type *DestTy, const Twine &Name = "",
+                      bool IsNonNeg = false) {
     if (IsFPConstrained)
       return CreateConstrainedFPCast(Intrinsic::experimental_constrained_uitofp,
                                      V, DestTy, nullptr, Name);
-    return CreateCast(Instruction::UIToFP, V, DestTy, Name);
+    if (Value *Folded = Folder.FoldCast(Instruction::UIToFP, V, DestTy))
+      return Folded;
+    Instruction *I = Insert(new UIToFPInst(V, DestTy), Name);
+    if (IsNonNeg)
+      I->setNonNeg();
+    return I;
   }
 
   Value *CreateSIToFP(Value *V, Type *DestTy, const Twine &Name = ""){
@@ -2138,6 +2176,9 @@ public:
     return Insert(CastInst::CreatePointerCast(V, DestTy), Name);
   }
 
+  // With opaque pointers enabled, this can be substituted with
+  // CreateAddrSpaceCast.
+  // TODO: Replace uses of this method and remove the method itself.
   Value *CreatePointerBitCastOrAddrSpaceCast(Value *V, Type *DestTy,
                                              const Twine &Name = "") {
     if (V->getType() == DestTy)
@@ -2309,7 +2350,7 @@ public:
 
   Value *CreateICmp(CmpInst::Predicate P, Value *LHS, Value *RHS,
                     const Twine &Name = "") {
-    if (auto *V = Folder.FoldICmp(P, LHS, RHS))
+    if (auto *V = Folder.FoldCmp(P, LHS, RHS))
       return V;
     return Insert(new ICmpInst(P, LHS, RHS), Name);
   }
@@ -2683,6 +2724,7 @@ public:
   IRBuilder(const IRBuilder &) = delete;
 
   InserterTy &getInserter() { return Inserter; }
+  const InserterTy &getInserter() const { return Inserter; }
 };
 
 template <typename FolderTy, typename InserterTy>

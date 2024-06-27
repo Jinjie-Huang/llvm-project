@@ -44,7 +44,6 @@
 #include <cassert>
 #include <iterator>
 #include <utility>
-#include <vector>
 
 using namespace llvm;
 
@@ -93,8 +92,8 @@ namespace {
       MachineFunctionPass::getAnalysisUsage(AU);
       AU.addRequired<AAResultsWrapperPass>();
       AU.addPreservedID(MachineLoopInfoID);
-      AU.addRequired<MachineDominatorTree>();
-      AU.addPreserved<MachineDominatorTree>();
+      AU.addRequired<MachineDominatorTreeWrapperPass>();
+      AU.addPreserved<MachineDominatorTreeWrapperPass>();
       AU.addRequired<MachineBlockFrequencyInfo>();
       AU.addPreserved<MachineBlockFrequencyInfo>();
     }
@@ -167,7 +166,7 @@ char &llvm::MachineCSEID = MachineCSE::ID;
 
 INITIALIZE_PASS_BEGIN(MachineCSE, DEBUG_TYPE,
                       "Machine Common Subexpression Elimination", false, false)
-INITIALIZE_PASS_DEPENDENCY(MachineDominatorTree)
+INITIALIZE_PASS_DEPENDENCY(MachineDominatorTreeWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(AAResultsWrapperPass)
 INITIALIZE_PASS_END(MachineCSE, DEBUG_TYPE,
                     "Machine Common Subexpression Elimination", false, false)
@@ -710,7 +709,7 @@ bool MachineCSE::ProcessBlockCSE(MachineBasicBlock *MBB) {
         for (MachineBasicBlock::iterator II = CSMI, IE = &MI; II != IE; ++II)
           for (auto ImplicitDef : ImplicitDefs)
             if (MachineOperand *MO = II->findRegisterUseOperand(
-                    ImplicitDef, /*isKill=*/true, TRI))
+                    ImplicitDef, TRI, /*isKill=*/true))
               MO->setIsKill(false);
       } else {
         // If the instructions aren't in the same BB, bail out and clear the
@@ -944,7 +943,7 @@ bool MachineCSE::runOnMachineFunction(MachineFunction &MF) {
   TRI = MF.getSubtarget().getRegisterInfo();
   MRI = &MF.getRegInfo();
   AA = &getAnalysis<AAResultsWrapperPass>().getAAResults();
-  DT = &getAnalysis<MachineDominatorTree>();
+  DT = &getAnalysis<MachineDominatorTreeWrapperPass>().getDomTree();
   MBFI = &getAnalysis<MachineBlockFrequencyInfo>();
   LookAheadLimit = TII->getMachineCSELookAheadLimit();
   bool ChangedPRE, ChangedCSE;

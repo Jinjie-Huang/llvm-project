@@ -1,4 +1,4 @@
-! RUN: %python %S/../test_errors.py %s %flang -fopenacc
+! RUN: %python %S/../test_errors.py %s %flang -fopenacc -pedantic
 
 ! Check OpenACC clause validity for the following construct and directive:
 !   2.6.5 Data
@@ -187,6 +187,19 @@ program openacc_data_validity
   !$acc data copy(aa) device_type(default) wait
   !$acc end data
 
+  do i = 1, 100
+    !$acc data copy(aa)
+    !ERROR: CYCLE to construct outside of DATA construct is not allowed
+    if (i == 10) cycle
+    !$acc end data
+  end do
+
+  !$acc data copy(aa)
+  do i = 1, 100
+    if (i == 10) cycle
+  end do
+  !$acc end data
+
 end program openacc_data_validity
 
 module mod1
@@ -208,6 +221,12 @@ contains
 
     !ERROR: Only variables are allowed in data clauses on the DATA directive
     !$acc data copy(t%t1_proc)
+    !$acc end data
+  end subroutine
+
+  subroutine sub5()
+    integer, parameter :: iparam = 1024
+    !$acc data copyin(iparam)
     !$acc end data
   end subroutine
 end module

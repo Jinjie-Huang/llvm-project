@@ -22,8 +22,6 @@
 //
 // Future loop memory idioms to recognize:
 //   memcmp, strlen, etc.
-// Future floating point idioms to recognize in -ffast-math mode:
-//   fpowi
 //
 // This could recognize common matrix multiplies and dot product idioms and
 // replace them with calls to BLAS (if linked in??).
@@ -1021,7 +1019,7 @@ bool LoopIdiomRecognize::processLoopStridedStore(
   SCEVExpander Expander(*SE, *DL, "loop-idiom");
   SCEVExpanderCleaner ExpCleaner(Expander);
 
-  Type *DestInt8PtrTy = Builder.getInt8PtrTy(DestAS);
+  Type *DestInt8PtrTy = Builder.getPtrTy(DestAS);
   Type *IntIdxTy = DL->getIndexType(DestPtr->getType());
 
   bool Changed = false;
@@ -1105,9 +1103,9 @@ bool LoopIdiomRecognize::processLoopStridedStore(
                                             PatternValue, ".memset_pattern");
     GV->setUnnamedAddr(GlobalValue::UnnamedAddr::Global); // Ok to merge these.
     GV->setAlignment(Align(16));
-    Value *PatternPtr = ConstantExpr::getBitCast(GV, Int8PtrTy);
+    Value *PatternPtr = GV;
     NewCall = Builder.CreateCall(MSP, {BasePtr, PatternPtr, NumBytes});
-    
+
     // Set the TBAA info if present.
     if (AATags.TBAA)
       NewCall->setMetadata(LLVMContext::MD_tbaa, AATags.TBAA);
@@ -1117,7 +1115,7 @@ bool LoopIdiomRecognize::processLoopStridedStore(
 
     if (AATags.NoAlias)
       NewCall->setMetadata(LLVMContext::MD_noalias, AATags.NoAlias);
-  } 
+  }
 
   NewCall->setDebugLoc(TheStore->getDebugLoc());
 
@@ -1282,7 +1280,7 @@ bool LoopIdiomRecognize::processLoopStoreOfLoopLoad(
   // feeds the stores.  Check for an alias by generating the base address and
   // checking everything.
   Value *StoreBasePtr = Expander.expandCodeFor(
-      StrStart, Builder.getInt8PtrTy(StrAS), Preheader->getTerminator());
+      StrStart, Builder.getPtrTy(StrAS), Preheader->getTerminator());
 
   // From here on out, conservatively report to the pass manager that we've
   // changed the IR, even if we later clean up these added instructions. There
@@ -1334,8 +1332,8 @@ bool LoopIdiomRecognize::processLoopStoreOfLoopLoad(
 
   // For a memcpy, we have to make sure that the input array is not being
   // mutated by the loop.
-  Value *LoadBasePtr = Expander.expandCodeFor(
-      LdStart, Builder.getInt8PtrTy(LdAS), Preheader->getTerminator());
+  Value *LoadBasePtr = Expander.expandCodeFor(LdStart, Builder.getPtrTy(LdAS),
+                                              Preheader->getTerminator());
 
   // If the store is a memcpy instruction, we must check if it will write to
   // the load memory locations. So remove it from the ignored stores.
@@ -2409,15 +2407,15 @@ bool LoopIdiomRecognize::recognizeShiftUntilBitTest() {
   if (!isGuaranteedNotToBeUndefOrPoison(BitPos)) {
     // BitMask may be computed from BitPos, Freeze BitPos so we can increase
     // it's use count.
-    Instruction *InsertPt = nullptr;
+    std::optional<BasicBlock::iterator> InsertPt = std::nullopt;
     if (auto *BitPosI = dyn_cast<Instruction>(BitPos))
       InsertPt = BitPosI->getInsertionPointAfterDef();
     else
-      InsertPt = &*DT->getRoot()->getFirstNonPHIOrDbgOrAlloca();
+      InsertPt = DT->getRoot()->getFirstNonPHIOrDbgOrAlloca();
     if (!InsertPt)
       return false;
     FreezeInst *BitPosFrozen =
-        new FreezeInst(BitPos, BitPos->getName() + ".fr", InsertPt);
+        new FreezeInst(BitPos, BitPos->getName() + ".fr", *InsertPt);
     BitPos->replaceUsesWithIf(BitPosFrozen, [BitPosFrozen](Use &U) {
       return U.getUser() != BitPosFrozen;
     });

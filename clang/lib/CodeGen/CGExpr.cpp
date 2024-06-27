@@ -26,6 +26,7 @@
 #include "clang/AST/Attr.h"
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/NSAPI.h"
+#include "clang/AST/StmtVisitor.h"
 #include "clang/Basic/Builtins.h"
 #include "clang/Basic/CodeGenOptions.h"
 #include "clang/Basic/SourceManager.h"
@@ -55,8 +56,13 @@ using namespace CodeGen;
 // Experiment to make sanitizers easier to debug
 static llvm::cl::opt<bool> ClSanitizeDebugDeoptimization(
     "ubsan-unique-traps", llvm::cl::Optional,
-    llvm::cl::desc("Deoptimize traps for UBSAN so there is 1 trap per check"),
-    llvm::cl::init(false));
+    llvm::cl::desc("Deoptimize traps for UBSAN so there is 1 trap per check."));
+
+// TODO: Introduce frontend options to enabled per sanitizers, similar to
+// `fsanitize-trap`.
+static llvm::cl::opt<bool> ClSanitizeGuardChecks(
+    "ubsan-guard-checks", llvm::cl::Optional,
+    llvm::cl::desc("Guard UBSAN checks with `llvm.allow.ubsan.check()`."));
 
 //===--------------------------------------------------------------------===//
 //                        Miscellaneous Helper Methods
@@ -64,21 +70,21 @@ static llvm::cl::opt<bool> ClSanitizeDebugDeoptimization(
 
 /// CreateTempAlloca - This creates a alloca and inserts it into the entry
 /// block.
-Address CodeGenFunction::CreateTempAllocaWithoutCast(llvm::Type *Ty,
-                                                     CharUnits Align,
-                                                     const Twine &Name,
-                                                     llvm::Value *ArraySize) {
+RawAddress
+CodeGenFunction::CreateTempAllocaWithoutCast(llvm::Type *Ty, CharUnits Align,
+                                             const Twine &Name,
+                                             llvm::Value *ArraySize) {
   auto Alloca = CreateTempAlloca(Ty, Name, ArraySize);
   Alloca->setAlignment(Align.getAsAlign());
-  return Address(Alloca, Ty, Align, KnownNonNull);
+  return RawAddress(Alloca, Ty, Align, KnownNonNull);
 }
 
 /// CreateTempAlloca - This creates a alloca and inserts it into the entry
 /// block. The alloca is casted to default address space if necessary.
-Address CodeGenFunction::CreateTempAlloca(llvm::Type *Ty, CharUnits Align,
-                                          const Twine &Name,
-                                          llvm::Value *ArraySize,
-                                          Address *AllocaAddr) {
+RawAddress CodeGenFunction::CreateTempAlloca(llvm::Type *Ty, CharUnits Align,
+                                             const Twine &Name,
+                                             llvm::Value *ArraySize,
+                                             RawAddress *AllocaAddr) {
   auto Alloca = CreateTempAllocaWithoutCast(Ty, Align, Name, ArraySize);
   if (AllocaAddr)
     *AllocaAddr = Alloca;
@@ -100,7 +106,7 @@ Address CodeGenFunction::CreateTempAlloca(llvm::Type *Ty, CharUnits Align,
         Ty->getPointerTo(DestAddrSpace), /*non-null*/ true);
   }
 
-  return Address(V, Ty, Align, KnownNonNull);
+  return RawAddress(V, Ty, Align, KnownNonNull);
 }
 
 /// CreateTempAlloca - This creates an alloca and inserts it into the entry
@@ -109,38 +115,45 @@ Address CodeGenFunction::CreateTempAlloca(llvm::Type *Ty, CharUnits Align,
 llvm::AllocaInst *CodeGenFunction::CreateTempAlloca(llvm::Type *Ty,
                                                     const Twine &Name,
                                                     llvm::Value *ArraySize) {
+  llvm::AllocaInst *Alloca;
   if (ArraySize)
-    return Builder.CreateAlloca(Ty, ArraySize, Name);
-  return new llvm::AllocaInst(Ty, CGM.getDataLayout().getAllocaAddrSpace(),
-                              ArraySize, Name, AllocaInsertPt);
+    Alloca = Builder.CreateAlloca(Ty, ArraySize, Name);
+  else
+    Alloca = new llvm::AllocaInst(Ty, CGM.getDataLayout().getAllocaAddrSpace(),
+                                  ArraySize, Name, AllocaInsertPt);
+  if (Allocas) {
+    Allocas->Add(Alloca);
+  }
+  return Alloca;
 }
 
 /// CreateDefaultAlignTempAlloca - This creates an alloca with the
 /// default alignment of the corresponding LLVM type, which is *not*
 /// guaranteed to be related in any way to the expected alignment of
 /// an AST type that might have been lowered to Ty.
-Address CodeGenFunction::CreateDefaultAlignTempAlloca(llvm::Type *Ty,
-                                                      const Twine &Name) {
+RawAddress CodeGenFunction::CreateDefaultAlignTempAlloca(llvm::Type *Ty,
+                                                         const Twine &Name) {
   CharUnits Align =
       CharUnits::fromQuantity(CGM.getDataLayout().getPrefTypeAlign(Ty));
   return CreateTempAlloca(Ty, Align, Name);
 }
 
-Address CodeGenFunction::CreateIRTemp(QualType Ty, const Twine &Name) {
+RawAddress CodeGenFunction::CreateIRTemp(QualType Ty, const Twine &Name) {
   CharUnits Align = getContext().getTypeAlignInChars(Ty);
   return CreateTempAlloca(ConvertType(Ty), Align, Name);
 }
 
-Address CodeGenFunction::CreateMemTemp(QualType Ty, const Twine &Name,
-                                       Address *Alloca) {
+RawAddress CodeGenFunction::CreateMemTemp(QualType Ty, const Twine &Name,
+                                          RawAddress *Alloca) {
   // FIXME: Should we prefer the preferred type alignment here?
   return CreateMemTemp(Ty, getContext().getTypeAlignInChars(Ty), Name, Alloca);
 }
 
-Address CodeGenFunction::CreateMemTemp(QualType Ty, CharUnits Align,
-                                       const Twine &Name, Address *Alloca) {
-  Address Result = CreateTempAlloca(ConvertTypeForMem(Ty), Align, Name,
-                                    /*ArraySize=*/nullptr, Alloca);
+RawAddress CodeGenFunction::CreateMemTemp(QualType Ty, CharUnits Align,
+                                          const Twine &Name,
+                                          RawAddress *Alloca) {
+  RawAddress Result = CreateTempAlloca(ConvertTypeForMem(Ty), Align, Name,
+                                       /*ArraySize=*/nullptr, Alloca);
 
   if (Ty->isConstantMatrixType()) {
     auto *ArrayTy = cast<llvm::ArrayType>(Result.getElementType());
@@ -153,13 +166,14 @@ Address CodeGenFunction::CreateMemTemp(QualType Ty, CharUnits Align,
   return Result;
 }
 
-Address CodeGenFunction::CreateMemTempWithoutCast(QualType Ty, CharUnits Align,
-                                                  const Twine &Name) {
+RawAddress CodeGenFunction::CreateMemTempWithoutCast(QualType Ty,
+                                                     CharUnits Align,
+                                                     const Twine &Name) {
   return CreateTempAllocaWithoutCast(ConvertTypeForMem(Ty), Align, Name);
 }
 
-Address CodeGenFunction::CreateMemTempWithoutCast(QualType Ty,
-                                                  const Twine &Name) {
+RawAddress CodeGenFunction::CreateMemTempWithoutCast(QualType Ty,
+                                                     const Twine &Name) {
   return CreateMemTempWithoutCast(Ty, getContext().getTypeAlignInChars(Ty),
                                   Name);
 }
@@ -303,8 +317,8 @@ pushTemporaryCleanup(CodeGenFunction &CGF, const MaterializeTemporaryExpr *M,
         CleanupKind CleanupKind;
         if (Lifetime == Qualifiers::OCL_Strong) {
           const ValueDecl *VD = M->getExtendingDecl();
-          bool Precise =
-              VD && isa<VarDecl>(VD) && VD->hasAttr<ObjCPreciseLifetimeAttr>();
+          bool Precise = isa_and_nonnull<VarDecl>(VD) &&
+                         VD->hasAttr<ObjCPreciseLifetimeAttr>();
           CleanupKind = CGF.getARCCleanupKind();
           Destroy = Precise ? &CodeGenFunction::destroyARCStrongPrecise
                             : &CodeGenFunction::destroyARCStrongImprecise;
@@ -358,7 +372,7 @@ pushTemporaryCleanup(CodeGenFunction &CGF, const MaterializeTemporaryExpr *M,
     } else {
       CleanupFn = CGF.CGM.getAddrAndTypeOfCXXStructor(
           GlobalDecl(ReferenceTemporaryDtor, Dtor_Complete));
-      CleanupArg = cast<llvm::Constant>(ReferenceTemporary.getPointer());
+      CleanupArg = cast<llvm::Constant>(ReferenceTemporary.emitRawPointer(CGF));
     }
     CGF.CGM.getCXXABI().registerGlobalDtor(
         CGF, *cast<VarDecl>(M->getExtendingDecl()), CleanupFn, CleanupArg);
@@ -383,10 +397,10 @@ pushTemporaryCleanup(CodeGenFunction &CGF, const MaterializeTemporaryExpr *M,
   }
 }
 
-static Address createReferenceTemporary(CodeGenFunction &CGF,
-                                        const MaterializeTemporaryExpr *M,
-                                        const Expr *Inner,
-                                        Address *Alloca = nullptr) {
+static RawAddress createReferenceTemporary(CodeGenFunction &CGF,
+                                           const MaterializeTemporaryExpr *M,
+                                           const Expr *Inner,
+                                           RawAddress *Alloca = nullptr) {
   auto &TCG = CGF.getTargetHooks();
   switch (M->getStorageDuration()) {
   case SD_FullExpression:
@@ -415,7 +429,7 @@ static Address createReferenceTemporary(CodeGenFunction &CGF,
               GV->getValueType()->getPointerTo(
                   CGF.getContext().getTargetAddressSpace(LangAS::Default)));
         // FIXME: Should we put the new global into a COMDAT?
-        return Address(C, GV->getValueType(), alignment);
+        return RawAddress(C, GV->getValueType(), alignment);
       }
     return CGF.CreateMemTemp(Ty, "ref.tmp", Alloca);
   }
@@ -431,7 +445,7 @@ static Address createReferenceTemporary(CodeGenFunction &CGF,
 
 /// Helper method to check if the underlying ABI is AAPCS
 static bool isAAPCS(const TargetInfo &TargetInfo) {
-  return TargetInfo.getABI().startswith("aapcs");
+  return TargetInfo.getABI().starts_with("aapcs");
 }
 
 LValue CodeGenFunction::
@@ -447,7 +461,7 @@ EmitMaterializeTemporaryExpr(const MaterializeTemporaryExpr *M) {
   auto ownership = M->getType().getObjCLifetime();
   if (ownership != Qualifiers::OCL_None &&
       ownership != Qualifiers::OCL_ExplicitNone) {
-    Address Object = createReferenceTemporary(*this, M, E);
+    RawAddress Object = createReferenceTemporary(*this, M, E);
     if (auto *Var = dyn_cast<llvm::GlobalVariable>(Object.getPointer())) {
       llvm::Type *Ty = ConvertTypeForMem(E->getType());
       Object = Object.withElementType(Ty);
@@ -501,8 +515,8 @@ EmitMaterializeTemporaryExpr(const MaterializeTemporaryExpr *M) {
   }
 
   // Create and initialize the reference temporary.
-  Address Alloca = Address::invalid();
-  Address Object = createReferenceTemporary(*this, M, E, &Alloca);
+  RawAddress Alloca = Address::invalid();
+  RawAddress Object = createReferenceTemporary(*this, M, E, &Alloca);
   if (auto *Var = dyn_cast<llvm::GlobalVariable>(
           Object.getPointer()->stripPointerCasts())) {
     llvm::Type *TemporaryType = ConvertTypeForMem(E->getType());
@@ -591,7 +605,7 @@ EmitMaterializeTemporaryExpr(const MaterializeTemporaryExpr *M) {
       LV = EmitLValueForField(LV, Adjustment.Field);
       assert(LV.isSimple() &&
              "materialized temporary field is not a simple lvalue");
-      Object = LV.getAddress(*this);
+      Object = LV.getAddress();
       break;
     }
 
@@ -937,16 +951,6 @@ static llvm::Value *getArrayIndexingBound(CodeGenFunction &CGF,
         return CGF.getVLASize(VAT).NumElts;
       // Ignore pass_object_size here. It's not applicable on decayed pointers.
     }
-
-    if (FieldDecl *FD = CGF.FindCountedByField(Base, StrictFlexArraysLevel)) {
-      const auto *ME = dyn_cast<MemberExpr>(CE->getSubExpr());
-      IndexedType = Base->getType();
-      return CGF
-          .EmitAnyExprToTemp(MemberExpr::CreateImplicit(
-              CGF.getContext(), const_cast<Expr *>(ME->getBase()),
-              ME->isArrow(), FD, FD->getType(), VK_LValue, OK_Ordinary))
-          .getScalarVal();
-    }
   }
 
   CodeGenFunction::SanitizerScope SanScope(&CGF);
@@ -960,46 +964,204 @@ static llvm::Value *getArrayIndexingBound(CodeGenFunction &CGF,
   return nullptr;
 }
 
-FieldDecl *CodeGenFunction::FindCountedByField(
-    const Expr *Base,
-    LangOptions::StrictFlexArraysLevelKind StrictFlexArraysLevel) {
-  const ValueDecl *VD = nullptr;
+namespace {
 
-  Base = Base->IgnoreParenImpCasts();
+/// \p StructAccessBase returns the base \p Expr of a field access. It returns
+/// either a \p DeclRefExpr, representing the base pointer to the struct, i.e.:
+///
+///     p in p-> a.b.c
+///
+/// or a \p MemberExpr, if the \p MemberExpr has the \p RecordDecl we're
+/// looking for:
+///
+///     struct s {
+///       struct s *ptr;
+///       int count;
+///       char array[] __attribute__((counted_by(count)));
+///     };
+///
+/// If we have an expression like \p p->ptr->array[index], we want the
+/// \p MemberExpr for \p p->ptr instead of \p p.
+class StructAccessBase
+    : public ConstStmtVisitor<StructAccessBase, const Expr *> {
+  const RecordDecl *ExpectedRD;
 
-  if (const auto *ME = dyn_cast<MemberExpr>(Base)) {
-    VD = dyn_cast<ValueDecl>(ME->getMemberDecl());
-  } else if (const auto *DRE = dyn_cast<DeclRefExpr>(Base)) {
-    // Pointing to the full structure.
-    VD = dyn_cast<ValueDecl>(DRE->getDecl());
-
-    QualType Ty = VD->getType();
+  bool IsExpectedRecordDecl(const Expr *E) const {
+    QualType Ty = E->getType();
     if (Ty->isPointerType())
       Ty = Ty->getPointeeType();
-
-    if (const auto *RD = Ty->getAsRecordDecl())
-      VD = RD->getLastField();
-  } else if (const auto *CE = dyn_cast<CastExpr>(Base)) {
-    if (const auto *ME = dyn_cast<MemberExpr>(CE->getSubExpr()))
-      VD = dyn_cast<ValueDecl>(ME->getMemberDecl());
+    return ExpectedRD == Ty->getAsRecordDecl();
   }
 
-  const auto *FD = dyn_cast_if_present<FieldDecl>(VD);
-  if (!FD || !FD->getParent() ||
-      !Decl::isFlexibleArrayMemberLike(getContext(), FD, FD->getType(),
-                                       StrictFlexArraysLevel, true))
+public:
+  StructAccessBase(const RecordDecl *ExpectedRD) : ExpectedRD(ExpectedRD) {}
+
+  //===--------------------------------------------------------------------===//
+  //                            Visitor Methods
+  //===--------------------------------------------------------------------===//
+
+  // NOTE: If we build C++ support for counted_by, then we'll have to handle
+  // horrors like this:
+  //
+  //     struct S {
+  //       int x, y;
+  //       int blah[] __attribute__((counted_by(x)));
+  //     } s;
+  //
+  //     int foo(int index, int val) {
+  //       int (S::*IHatePMDs)[] = &S::blah;
+  //       (s.*IHatePMDs)[index] = val;
+  //     }
+
+  const Expr *Visit(const Expr *E) {
+    return ConstStmtVisitor<StructAccessBase, const Expr *>::Visit(E);
+  }
+
+  const Expr *VisitStmt(const Stmt *S) { return nullptr; }
+
+  // These are the types we expect to return (in order of most to least
+  // likely):
+  //
+  //   1. DeclRefExpr - This is the expression for the base of the structure.
+  //      It's exactly what we want to build an access to the \p counted_by
+  //      field.
+  //   2. MemberExpr - This is the expression that has the same \p RecordDecl
+  //      as the flexble array member's lexical enclosing \p RecordDecl. This
+  //      allows us to catch things like: "p->p->array"
+  //   3. CompoundLiteralExpr - This is for people who create something
+  //      heretical like (struct foo has a flexible array member):
+  //
+  //        (struct foo){ 1, 2 }.blah[idx];
+  const Expr *VisitDeclRefExpr(const DeclRefExpr *E) {
+    return IsExpectedRecordDecl(E) ? E : nullptr;
+  }
+  const Expr *VisitMemberExpr(const MemberExpr *E) {
+    if (IsExpectedRecordDecl(E) && E->isArrow())
+      return E;
+    const Expr *Res = Visit(E->getBase());
+    return !Res && IsExpectedRecordDecl(E) ? E : Res;
+  }
+  const Expr *VisitCompoundLiteralExpr(const CompoundLiteralExpr *E) {
+    return IsExpectedRecordDecl(E) ? E : nullptr;
+  }
+  const Expr *VisitCallExpr(const CallExpr *E) {
+    return IsExpectedRecordDecl(E) ? E : nullptr;
+  }
+
+  const Expr *VisitArraySubscriptExpr(const ArraySubscriptExpr *E) {
+    if (IsExpectedRecordDecl(E))
+      return E;
+    return Visit(E->getBase());
+  }
+  const Expr *VisitCastExpr(const CastExpr *E) {
+    return Visit(E->getSubExpr());
+  }
+  const Expr *VisitParenExpr(const ParenExpr *E) {
+    return Visit(E->getSubExpr());
+  }
+  const Expr *VisitUnaryAddrOf(const UnaryOperator *E) {
+    return Visit(E->getSubExpr());
+  }
+  const Expr *VisitUnaryDeref(const UnaryOperator *E) {
+    return Visit(E->getSubExpr());
+  }
+};
+
+} // end anonymous namespace
+
+using RecIndicesTy =
+    SmallVector<std::pair<const RecordDecl *, llvm::Value *>, 8>;
+
+static bool getGEPIndicesToField(CodeGenFunction &CGF, const RecordDecl *RD,
+                                 const FieldDecl *FD, RecIndicesTy &Indices) {
+  const CGRecordLayout &Layout = CGF.CGM.getTypes().getCGRecordLayout(RD);
+  int64_t FieldNo = -1;
+  for (const Decl *D : RD->decls()) {
+    if (const auto *Field = dyn_cast<FieldDecl>(D)) {
+      FieldNo = Layout.getLLVMFieldNo(Field);
+      if (FD == Field) {
+        Indices.emplace_back(std::make_pair(RD, CGF.Builder.getInt32(FieldNo)));
+        return true;
+      }
+    }
+
+    if (const auto *Record = dyn_cast<RecordDecl>(D)) {
+      ++FieldNo;
+      if (getGEPIndicesToField(CGF, Record, FD, Indices)) {
+        if (RD->isUnion())
+          FieldNo = 0;
+        Indices.emplace_back(std::make_pair(RD, CGF.Builder.getInt32(FieldNo)));
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+/// This method is typically called in contexts where we can't generate
+/// side-effects, like in __builtin_dynamic_object_size. When finding
+/// expressions, only choose those that have either already been emitted or can
+/// be loaded without side-effects.
+///
+/// - \p FAMDecl: the \p Decl for the flexible array member. It may not be
+///   within the top-level struct.
+/// - \p CountDecl: must be within the same non-anonymous struct as \p FAMDecl.
+llvm::Value *CodeGenFunction::EmitCountedByFieldExpr(
+    const Expr *Base, const FieldDecl *FAMDecl, const FieldDecl *CountDecl) {
+  const RecordDecl *RD = CountDecl->getParent()->getOuterLexicalRecordContext();
+
+  // Find the base struct expr (i.e. p in p->a.b.c.d).
+  const Expr *StructBase = StructAccessBase(RD).Visit(Base);
+  if (!StructBase || StructBase->HasSideEffects(getContext()))
     return nullptr;
 
-  const auto *CBA = FD->getAttr<CountedByAttr>();
-  if (!CBA)
+  llvm::Value *Res = nullptr;
+  if (const auto *DRE = dyn_cast<DeclRefExpr>(StructBase)) {
+    Res = EmitDeclRefLValue(DRE).getPointer(*this);
+    Res = Builder.CreateAlignedLoad(ConvertType(DRE->getType()), Res,
+                                    getPointerAlign(), "dre.load");
+  } else if (const MemberExpr *ME = dyn_cast<MemberExpr>(StructBase)) {
+    LValue LV = EmitMemberExpr(ME);
+    Address Addr = LV.getAddress();
+    Res = Addr.emitRawPointer(*this);
+  } else if (StructBase->getType()->isPointerType()) {
+    LValueBaseInfo BaseInfo;
+    TBAAAccessInfo TBAAInfo;
+    Address Addr = EmitPointerWithAlignment(StructBase, &BaseInfo, &TBAAInfo);
+    Res = Addr.emitRawPointer(*this);
+  } else {
+    return nullptr;
+  }
+
+  llvm::Value *Zero = Builder.getInt32(0);
+  RecIndicesTy Indices;
+
+  getGEPIndicesToField(*this, RD, CountDecl, Indices);
+
+  for (auto I = Indices.rbegin(), E = Indices.rend(); I != E; ++I)
+    Res = Builder.CreateInBoundsGEP(
+        ConvertType(QualType(I->first->getTypeForDecl(), 0)), Res,
+        {Zero, I->second}, "..counted_by.gep");
+
+  return Builder.CreateAlignedLoad(ConvertType(CountDecl->getType()), Res,
+                                   getIntAlign(), "..counted_by.load");
+}
+
+const FieldDecl *CodeGenFunction::FindCountedByField(const FieldDecl *FD) {
+  if (!FD)
     return nullptr;
 
-  StringRef FieldName = CBA->getCountedByField()->getName();
-  auto It =
-      llvm::find_if(FD->getParent()->fields(), [&](const FieldDecl *Field) {
-        return FieldName == Field->getName();
-      });
-  return It != FD->getParent()->field_end() ? *It : nullptr;
+  const auto *CAT = FD->getType()->getAs<CountAttributedType>();
+  if (!CAT)
+    return nullptr;
+
+  const auto *CountDRE = cast<DeclRefExpr>(CAT->getCountExpr());
+  const auto *CountDecl = CountDRE->getDecl();
+  if (const auto *IFD = dyn_cast<IndirectFieldDecl>(CountDecl))
+    CountDecl = IFD->getAnonField();
+
+  return dyn_cast<FieldDecl>(CountDecl);
 }
 
 void CodeGenFunction::EmitBoundsCheck(const Expr *E, const Expr *Base,
@@ -1008,11 +1170,18 @@ void CodeGenFunction::EmitBoundsCheck(const Expr *E, const Expr *Base,
   assert(SanOpts.has(SanitizerKind::ArrayBounds) &&
          "should not be called unless adding bounds checks");
   const LangOptions::StrictFlexArraysLevelKind StrictFlexArraysLevel =
-    getLangOpts().getStrictFlexArraysLevel();
-
+      getLangOpts().getStrictFlexArraysLevel();
   QualType IndexedType;
   llvm::Value *Bound =
       getArrayIndexingBound(*this, Base, IndexedType, StrictFlexArraysLevel);
+
+  EmitBoundsCheckImpl(E, Bound, Index, IndexType, IndexedType, Accessed);
+}
+
+void CodeGenFunction::EmitBoundsCheckImpl(const Expr *E, llvm::Value *Bound,
+                                          llvm::Value *Index,
+                                          QualType IndexType,
+                                          QualType IndexedType, bool Accessed) {
   if (!Bound)
     return;
 
@@ -1032,7 +1201,6 @@ void CodeGenFunction::EmitBoundsCheck(const Expr *E, const Expr *Base,
   EmitCheck(std::make_pair(Check, SanitizerKind::ArrayBounds),
             SanitizerHandler::OutOfBounds, StaticData, Index);
 }
-
 
 CodeGenFunction::ComplexPairTy CodeGenFunction::
 EmitComplexPrePostIncDec(const UnaryOperator *E, LValue LV,
@@ -1127,8 +1295,7 @@ static Address EmitPointerWithAlignment(const Expr *E, LValueBaseInfo *BaseInfo,
           if (InnerBaseInfo.getAlignmentSource() != AlignmentSource::Decl) {
             if (BaseInfo)
               BaseInfo->mergeForCast(TargetTypeBaseInfo);
-            Addr = Address(Addr.getPointer(), Addr.getElementType(), Align,
-                           IsKnownNonNull);
+            Addr.setAlignment(Align);
           }
         }
 
@@ -1145,8 +1312,8 @@ static Address EmitPointerWithAlignment(const Expr *E, LValueBaseInfo *BaseInfo,
             CGF.ConvertTypeForMem(E->getType()->getPointeeType());
         Addr = Addr.withElementType(ElemTy);
         if (CE->getCastKind() == CK_AddressSpaceConversion)
-          Addr = CGF.Builder.CreateAddrSpaceCast(Addr,
-                                                 CGF.ConvertType(E->getType()));
+          Addr = CGF.Builder.CreateAddrSpaceCast(
+              Addr, CGF.ConvertType(E->getType()), ElemTy);
         return Addr;
       }
       break;
@@ -1186,7 +1353,7 @@ static Address EmitPointerWithAlignment(const Expr *E, LValueBaseInfo *BaseInfo,
       LValue LV = CGF.EmitLValue(UO->getSubExpr(), IsKnownNonNull);
       if (BaseInfo) *BaseInfo = LV.getBaseInfo();
       if (TBAAInfo) *TBAAInfo = LV.getTBAAInfo();
-      return LV.getAddress(CGF);
+      return LV.getAddress();
     }
   }
 
@@ -1201,7 +1368,7 @@ static Address EmitPointerWithAlignment(const Expr *E, LValueBaseInfo *BaseInfo,
       LValue LV = CGF.EmitLValue(Call->getArg(0), IsKnownNonNull);
       if (BaseInfo) *BaseInfo = LV.getBaseInfo();
       if (TBAAInfo) *TBAAInfo = LV.getTBAAInfo();
-      return LV.getAddress(CGF);
+      return LV.getAddress();
     }
     }
   }
@@ -1209,10 +1376,9 @@ static Address EmitPointerWithAlignment(const Expr *E, LValueBaseInfo *BaseInfo,
   // TODO: conditional operators, comma.
 
   // Otherwise, use the alignment of the type.
-  CharUnits Align =
-      CGF.CGM.getNaturalPointeeTypeAlignment(E->getType(), BaseInfo, TBAAInfo);
-  llvm::Type *ElemTy = CGF.ConvertTypeForMem(E->getType()->getPointeeType());
-  return Address(CGF.EmitScalarExpr(E), ElemTy, Align, IsKnownNonNull);
+  return CGF.makeNaturalAddressForPointer(
+      CGF.EmitScalarExpr(E), E->getType()->getPointeeType(), CharUnits(),
+      /*ForPointeeType=*/true, BaseInfo, TBAAInfo, IsKnownNonNull);
 }
 
 /// EmitPointerWithAlignment - Given an expression of pointer type, try to
@@ -1313,8 +1479,7 @@ LValue CodeGenFunction::EmitCheckedLValue(const Expr *E, TypeCheckKind TCK) {
       if (IsBaseCXXThis || isa<DeclRefExpr>(ME->getBase()))
         SkippedChecks.set(SanitizerKind::Null, true);
     }
-    EmitTypeCheck(TCK, E->getExprLoc(), LV.getPointer(*this), E->getType(),
-                  LV.getAlignment(), SkippedChecks);
+    EmitTypeCheck(TCK, E->getExprLoc(), LV, E->getType(), SkippedChecks);
   }
   return LV;
 }
@@ -1340,6 +1505,14 @@ LValue CodeGenFunction::EmitLValue(const Expr *E,
   if (IsKnownNonNull && !LV.isKnownNonNull())
     LV.setKnownNonNull();
   return LV;
+}
+
+static QualType getConstantExprReferredType(const FullExpr *E,
+                                            const ASTContext &Ctx) {
+  const Expr *SE = E->getSubExpr()->IgnoreImplicit();
+  if (isa<OpaqueValueExpr>(SE))
+    return SE->getType();
+  return cast<CallExpr>(SE)->getCallReturnType(Ctx)->getPointeeType();
 }
 
 LValue CodeGenFunction::EmitLValueHelper(const Expr *E,
@@ -1380,9 +1553,7 @@ LValue CodeGenFunction::EmitLValueHelper(const Expr *E,
   case Expr::ConstantExprClass: {
     const ConstantExpr *CE = cast<ConstantExpr>(E);
     if (llvm::Value *Result = ConstantEmitter(*this).tryEmitConstantExpr(CE)) {
-      QualType RetType = cast<CallExpr>(CE->getSubExpr()->IgnoreImplicit())
-                             ->getCallReturnType(getContext())
-                             ->getPointeeType();
+      QualType RetType = getConstantExprReferredType(CE, getContext());
       return MakeNaturalAlignAddrLValue(Result, RetType);
     }
     return EmitLValue(cast<ConstantExpr>(E)->getSubExpr(), IsKnownNonNull);
@@ -1419,12 +1590,12 @@ LValue CodeGenFunction::EmitLValueHelper(const Expr *E,
     if (LV.isSimple()) {
       // Defend against branches out of gnu statement expressions surrounded by
       // cleanups.
-      Address Addr = LV.getAddress(*this);
-      llvm::Value *V = Addr.getPointer();
+      Address Addr = LV.getAddress();
+      llvm::Value *V = Addr.getBasePointer();
       Scope.ForceCleanup({&V});
-      return LValue::MakeAddr(Addr.withPointer(V, Addr.isKnownNonNull()),
-                              LV.getType(), getContext(), LV.getBaseInfo(),
-                              LV.getTBAAInfo());
+      Addr.replaceBasePointer(V);
+      return LValue::MakeAddr(Addr, LV.getType(), getContext(),
+                              LV.getBaseInfo(), LV.getTBAAInfo());
     }
     // FIXME: Is it possible to create an ExprWithCleanups that produces a
     // bitfield lvalue or some other non-simple lvalue?
@@ -1456,8 +1627,8 @@ LValue CodeGenFunction::EmitLValueHelper(const Expr *E,
     return EmitArraySubscriptExpr(cast<ArraySubscriptExpr>(E));
   case Expr::MatrixSubscriptExprClass:
     return EmitMatrixSubscriptExpr(cast<MatrixSubscriptExpr>(E));
-  case Expr::OMPArraySectionExprClass:
-    return EmitOMPArraySectionExpr(cast<OMPArraySectionExpr>(E));
+  case Expr::ArraySectionExprClass:
+    return EmitArraySectionExpr(cast<ArraySectionExpr>(E));
   case Expr::ExtVectorElementExprClass:
     return EmitExtVectorElementExpr(cast<ExtVectorElementExpr>(E));
   case Expr::CXXThisExprClass:
@@ -1495,6 +1666,8 @@ LValue CodeGenFunction::EmitLValueHelper(const Expr *E,
     return EmitCoawaitLValue(cast<CoawaitExpr>(E));
   case Expr::CoyieldExprClass:
     return EmitCoyieldLValue(cast<CoyieldExpr>(E));
+  case Expr::PackIndexingExprClass:
+    return EmitLValue(cast<PackIndexingExpr>(E)->getSelectedExpr());
   }
 }
 
@@ -1666,7 +1839,7 @@ llvm::Value *CodeGenFunction::emitScalarConstant(
 
 llvm::Value *CodeGenFunction::EmitLoadOfScalar(LValue lvalue,
                                                SourceLocation Loc) {
-  return EmitLoadOfScalar(lvalue.getAddress(*this), lvalue.isVolatile(),
+  return EmitLoadOfScalar(lvalue.getAddress(), lvalue.isVolatile(),
                           lvalue.getType(), Loc, lvalue.getBaseInfo(),
                           lvalue.getTBAAInfo(), lvalue.isNontemporal());
 }
@@ -1766,7 +1939,7 @@ llvm::Value *CodeGenFunction::EmitLoadOfScalar(Address Addr, bool Volatile,
                                                LValueBaseInfo BaseInfo,
                                                TBAAAccessInfo TBAAInfo,
                                                bool isNontemporal) {
-  if (auto *GV = dyn_cast<llvm::GlobalValue>(Addr.getPointer()))
+  if (auto *GV = dyn_cast<llvm::GlobalValue>(Addr.getBasePointer()))
     if (GV->isThreadLocal())
       Addr = Addr.withPointer(Builder.CreateThreadLocalAddress(GV),
                               NotKnownNonNull);
@@ -1876,8 +2049,9 @@ llvm::Value *CodeGenFunction::EmitFromMemory(llvm::Value *Value, QualType Ty) {
 
 // Convert the pointer of \p Addr to a pointer to a vector (the value type of
 // MatrixType), if it points to a array (the memory type of MatrixType).
-static Address MaybeConvertMatrixAddress(Address Addr, CodeGenFunction &CGF,
-                                         bool IsVector = true) {
+static RawAddress MaybeConvertMatrixAddress(RawAddress Addr,
+                                            CodeGenFunction &CGF,
+                                            bool IsVector = true) {
   auto *ArrayTy = dyn_cast<llvm::ArrayType>(Addr.getElementType());
   if (ArrayTy && IsVector) {
     auto *VectorTy = llvm::FixedVectorType::get(ArrayTy->getElementType(),
@@ -1902,7 +2076,7 @@ static Address MaybeConvertMatrixAddress(Address Addr, CodeGenFunction &CGF,
 // (VectorType).
 static void EmitStoreOfMatrixScalar(llvm::Value *value, LValue lvalue,
                                     bool isInit, CodeGenFunction &CGF) {
-  Address Addr = MaybeConvertMatrixAddress(lvalue.getAddress(CGF), CGF,
+  Address Addr = MaybeConvertMatrixAddress(lvalue.getAddress(), CGF,
                                            value->getType()->isVectorTy());
   CGF.EmitStoreOfScalar(value, Addr, lvalue.isVolatile(), lvalue.getType(),
                         lvalue.getBaseInfo(), lvalue.getTBAAInfo(), isInit,
@@ -1914,7 +2088,7 @@ void CodeGenFunction::EmitStoreOfScalar(llvm::Value *Value, Address Addr,
                                         LValueBaseInfo BaseInfo,
                                         TBAAAccessInfo TBAAInfo,
                                         bool isInit, bool isNontemporal) {
-  if (auto *GV = dyn_cast<llvm::GlobalValue>(Addr.getPointer()))
+  if (auto *GV = dyn_cast<llvm::GlobalValue>(Addr.getBasePointer()))
     if (GV->isThreadLocal())
       Addr = Addr.withPointer(Builder.CreateThreadLocalAddress(GV),
                               NotKnownNonNull);
@@ -1972,7 +2146,7 @@ void CodeGenFunction::EmitStoreOfScalar(llvm::Value *value, LValue lvalue,
     return;
   }
 
-  EmitStoreOfScalar(value, lvalue.getAddress(*this), lvalue.isVolatile(),
+  EmitStoreOfScalar(value, lvalue.getAddress(), lvalue.isVolatile(),
                     lvalue.getType(), lvalue.getBaseInfo(),
                     lvalue.getTBAAInfo(), isInit, lvalue.isNontemporal());
 }
@@ -1982,9 +2156,24 @@ void CodeGenFunction::EmitStoreOfScalar(llvm::Value *value, LValue lvalue,
 static RValue EmitLoadOfMatrixLValue(LValue LV, SourceLocation Loc,
                                      CodeGenFunction &CGF) {
   assert(LV.getType()->isConstantMatrixType());
-  Address Addr = MaybeConvertMatrixAddress(LV.getAddress(CGF), CGF);
+  Address Addr = MaybeConvertMatrixAddress(LV.getAddress(), CGF);
   LV.setAddress(Addr);
   return RValue::get(CGF.EmitLoadOfScalar(LV, Loc));
+}
+
+RValue CodeGenFunction::EmitLoadOfAnyValue(LValue LV, AggValueSlot Slot,
+                                           SourceLocation Loc) {
+  QualType Ty = LV.getType();
+  switch (getEvaluationKind(Ty)) {
+  case TEK_Scalar:
+    return EmitLoadOfLValue(LV, Loc);
+  case TEK_Complex:
+    return RValue::getComplex(EmitLoadOfComplex(LV, Loc));
+  case TEK_Aggregate:
+    EmitAggFinalDestCopy(Ty, Slot, LV, EVK_NonRValue);
+    return Slot.asRValue();
+  }
+  llvm_unreachable("bad evaluation kind");
 }
 
 /// EmitLoadOfLValue - Given an expression that represents a value lvalue, this
@@ -1993,18 +2182,18 @@ static RValue EmitLoadOfMatrixLValue(LValue LV, SourceLocation Loc,
 RValue CodeGenFunction::EmitLoadOfLValue(LValue LV, SourceLocation Loc) {
   if (LV.isObjCWeak()) {
     // load of a __weak object.
-    Address AddrWeakObj = LV.getAddress(*this);
+    Address AddrWeakObj = LV.getAddress();
     return RValue::get(CGM.getObjCRuntime().EmitObjCWeakRead(*this,
                                                              AddrWeakObj));
   }
   if (LV.getQuals().getObjCLifetime() == Qualifiers::OCL_Weak) {
     // In MRC mode, we do a load+autorelease.
     if (!getLangOpts().ObjCAutoRefCount) {
-      return RValue::get(EmitARCLoadWeak(LV.getAddress(*this)));
+      return RValue::get(EmitARCLoadWeak(LV.getAddress()));
     }
 
     // In ARC mode, we load retained and then consume the value.
-    llvm::Value *Object = EmitARCLoadWeakRetained(LV.getAddress(*this));
+    llvm::Value *Object = EmitARCLoadWeakRetained(LV.getAddress());
     Object = EmitObjCConsumeObject(LV.getType(), Object);
     return RValue::get(Object);
   }
@@ -2092,6 +2281,14 @@ RValue CodeGenFunction::EmitLoadOfBitfieldLValue(LValue LV,
 RValue CodeGenFunction::EmitLoadOfExtVectorElementLValue(LValue LV) {
   llvm::Value *Vec = Builder.CreateLoad(LV.getExtVectorAddress(),
                                         LV.isVolatileQualified());
+
+  // HLSL allows treating scalars as one-element vectors. Converting the scalar
+  // IR value to a vector here allows the rest of codegen to behave as normal.
+  if (getLangOpts().HLSL && !Vec->getType()->isVectorTy()) {
+    llvm::Type *DstTy = llvm::FixedVectorType::get(Vec->getType(), 1);
+    llvm::Value *Zero = llvm::Constant::getNullValue(CGM.Int64Ty);
+    Vec = Builder.CreateInsertElement(DstTy, Vec, Zero, "cast.splat");
+  }
 
   const llvm::Constant *Elts = LV.getExtVectorElts();
 
@@ -2231,9 +2428,9 @@ void CodeGenFunction::EmitStoreThroughLValue(RValue Src, LValue Dst,
     case Qualifiers::OCL_Weak:
       if (isInit)
         // Initialize and then skip the primitive store.
-        EmitARCInitWeak(Dst.getAddress(*this), Src.getScalarVal());
+        EmitARCInitWeak(Dst.getAddress(), Src.getScalarVal());
       else
-        EmitARCStoreWeak(Dst.getAddress(*this), Src.getScalarVal(),
+        EmitARCStoreWeak(Dst.getAddress(), Src.getScalarVal(),
                          /*ignore*/ true);
       return;
 
@@ -2247,7 +2444,7 @@ void CodeGenFunction::EmitStoreThroughLValue(RValue Src, LValue Dst,
 
   if (Dst.isObjCWeak() && !Dst.isNonGC()) {
     // load of a __weak object.
-    Address LvalueDst = Dst.getAddress(*this);
+    Address LvalueDst = Dst.getAddress();
     llvm::Value *src = Src.getScalarVal();
      CGM.getObjCRuntime().EmitObjCWeakAssign(*this, src, LvalueDst);
     return;
@@ -2255,20 +2452,18 @@ void CodeGenFunction::EmitStoreThroughLValue(RValue Src, LValue Dst,
 
   if (Dst.isObjCStrong() && !Dst.isNonGC()) {
     // load of a __strong object.
-    Address LvalueDst = Dst.getAddress(*this);
+    Address LvalueDst = Dst.getAddress();
     llvm::Value *src = Src.getScalarVal();
     if (Dst.isObjCIvar()) {
       assert(Dst.getBaseIvarExp() && "BaseIvarExp is NULL");
       llvm::Type *ResultType = IntPtrTy;
       Address dst = EmitPointerWithAlignment(Dst.getBaseIvarExp());
-      llvm::Value *RHS = dst.getPointer();
+      llvm::Value *RHS = dst.emitRawPointer(*this);
       RHS = Builder.CreatePtrToInt(RHS, ResultType, "sub.ptr.rhs.cast");
-      llvm::Value *LHS =
-        Builder.CreatePtrToInt(LvalueDst.getPointer(), ResultType,
-                               "sub.ptr.lhs.cast");
+      llvm::Value *LHS = Builder.CreatePtrToInt(LvalueDst.emitRawPointer(*this),
+                                                ResultType, "sub.ptr.lhs.cast");
       llvm::Value *BytesBetween = Builder.CreateSub(LHS, RHS, "ivar.offset");
-      CGM.getObjCRuntime().EmitObjCIvarAssign(*this, src, dst,
-                                              BytesBetween);
+      CGM.getObjCRuntime().EmitObjCIvarAssign(*this, src, dst, BytesBetween);
     } else if (Dst.isGlobalObjCRef()) {
       CGM.getObjCRuntime().EmitObjCGlobalAssign(*this, src, LvalueDst,
                                                 Dst.isThreadLocalRef());
@@ -2362,10 +2557,20 @@ void CodeGenFunction::EmitStoreThroughBitfieldLValue(RValue Src, LValue Dst,
 
 void CodeGenFunction::EmitStoreThroughExtVectorComponentLValue(RValue Src,
                                                                LValue Dst) {
+  // HLSL allows storing to scalar values through ExtVector component LValues.
+  // To support this we need to handle the case where the destination address is
+  // a scalar.
+  Address DstAddr = Dst.getExtVectorAddress();
+  if (!DstAddr.getElementType()->isVectorTy()) {
+    assert(!Dst.getType()->isVectorType() &&
+           "this should only occur for non-vector l-values");
+    Builder.CreateStore(Src.getScalarVal(), DstAddr, Dst.isVolatileQualified());
+    return;
+  }
+
   // This access turns into a read/modify/write of the vector.  Load the input
   // value now.
-  llvm::Value *Vec = Builder.CreateLoad(Dst.getExtVectorAddress(),
-                                        Dst.isVolatileQualified());
+  llvm::Value *Vec = Builder.CreateLoad(DstAddr, Dst.isVolatileQualified());
   const llvm::Constant *Elts = Dst.getExtVectorElts();
 
   llvm::Value *SrcVal = Src.getScalarVal();
@@ -2413,7 +2618,8 @@ void CodeGenFunction::EmitStoreThroughExtVectorComponentLValue(RValue Src,
       llvm_unreachable("unexpected shorten vector length");
     }
   } else {
-    // If the Src is a scalar (not a vector) it must be updating one element.
+    // If the Src is a scalar (not a vector), and the target is a vector it must
+    // be updating one element.
     unsigned InIdx = getAccessedFieldNo(0, Elts);
     llvm::Value *Elt = llvm::ConstantInt::get(SizeTy, InIdx);
     Vec = Builder.CreateInsertElement(Vec, SrcVal, Elt);
@@ -2586,14 +2792,11 @@ CodeGenFunction::EmitLoadOfReference(LValue RefLVal,
                                      LValueBaseInfo *PointeeBaseInfo,
                                      TBAAAccessInfo *PointeeTBAAInfo) {
   llvm::LoadInst *Load =
-      Builder.CreateLoad(RefLVal.getAddress(*this), RefLVal.isVolatile());
+      Builder.CreateLoad(RefLVal.getAddress(), RefLVal.isVolatile());
   CGM.DecorateInstructionWithTBAA(Load, RefLVal.getTBAAInfo());
-
-  QualType PointeeType = RefLVal.getType()->getPointeeType();
-  CharUnits Align = CGM.getNaturalTypeAlignment(
-      PointeeType, PointeeBaseInfo, PointeeTBAAInfo,
-      /* forPointeeType= */ true);
-  return Address(Load, ConvertTypeForMem(PointeeType), Align);
+  return makeNaturalAddressForPointer(Load, RefLVal.getType()->getPointeeType(),
+                                      CharUnits(), /*ForPointeeType=*/true,
+                                      PointeeBaseInfo, PointeeTBAAInfo);
 }
 
 LValue CodeGenFunction::EmitLoadOfReferenceLValue(LValue RefLVal) {
@@ -2610,10 +2813,9 @@ Address CodeGenFunction::EmitLoadOfPointer(Address Ptr,
                                            LValueBaseInfo *BaseInfo,
                                            TBAAAccessInfo *TBAAInfo) {
   llvm::Value *Addr = Builder.CreateLoad(Ptr);
-  return Address(Addr, ConvertTypeForMem(PtrTy->getPointeeType()),
-                 CGM.getNaturalTypeAlignment(PtrTy->getPointeeType(), BaseInfo,
-                                             TBAAInfo,
-                                             /*forPointeeType=*/true));
+  return makeNaturalAddressForPointer(Addr, PtrTy->getPointeeType(),
+                                      CharUnits(), /*ForPointeeType=*/true,
+                                      BaseInfo, TBAAInfo);
 }
 
 LValue CodeGenFunction::EmitLoadOfPointerLValue(Address PtrAddr,
@@ -2809,7 +3011,7 @@ LValue CodeGenFunction::EmitDeclRefLValue(const DeclRefExpr *E) {
                                         /* BaseInfo= */ nullptr,
                                         /* TBAAInfo= */ nullptr,
                                         /* forPointeeType= */ true);
-        Addr = Address(Val, ConvertTypeForMem(E->getType()), Alignment);
+        Addr = makeNaturalAddressForPointer(Val, T, Alignment);
       }
       return MakeAddrLValue(Addr, T, AlignmentSource::Decl);
     }
@@ -2840,12 +3042,13 @@ LValue CodeGenFunction::EmitDeclRefLValue(const DeclRefExpr *E) {
         LValue CapLVal =
             EmitCapturedFieldLValue(*this, CapturedStmtInfo->lookup(VD),
                                     CapturedStmtInfo->getContextValue());
-        Address LValueAddress = CapLVal.getAddress(*this);
-        CapLVal = MakeAddrLValue(
-            Address(LValueAddress.getPointer(), LValueAddress.getElementType(),
-                    getContext().getDeclAlign(VD)),
-            CapLVal.getType(), LValueBaseInfo(AlignmentSource::Decl),
-            CapLVal.getTBAAInfo());
+        Address LValueAddress = CapLVal.getAddress();
+        CapLVal = MakeAddrLValue(Address(LValueAddress.emitRawPointer(*this),
+                                         LValueAddress.getElementType(),
+                                         getContext().getDeclAlign(VD)),
+                                 CapLVal.getType(),
+                                 LValueBaseInfo(AlignmentSource::Decl),
+                                 CapLVal.getTBAAInfo());
         // Mark lvalue as nontemporal if the variable is marked as nontemporal
         // in simd context.
         if (getLangOpts().OpenMP &&
@@ -2901,7 +3104,8 @@ LValue CodeGenFunction::EmitDeclRefLValue(const DeclRefExpr *E) {
     // Handle threadlocal function locals.
     if (VD->getTLSKind() != VarDecl::TLS_None)
       addr = addr.withPointer(
-          Builder.CreateThreadLocalAddress(addr.getPointer()), NotKnownNonNull);
+          Builder.CreateThreadLocalAddress(addr.getBasePointer()),
+          NotKnownNonNull);
 
     // Check for OpenMP threadprivate variables.
     if (getLangOpts().OpenMP && !getLangOpts().OpenMPSimd &&
@@ -2973,9 +3177,20 @@ LValue CodeGenFunction::EmitDeclRefLValue(const DeclRefExpr *E) {
     return MakeAddrLValue(CGM.GetAddrOfMSGuidDecl(GD), T,
                           AlignmentSource::Decl);
 
-  if (const auto *TPO = dyn_cast<TemplateParamObjectDecl>(ND))
-    return MakeAddrLValue(CGM.GetAddrOfTemplateParamObject(TPO), T,
-                          AlignmentSource::Decl);
+  if (const auto *TPO = dyn_cast<TemplateParamObjectDecl>(ND)) {
+    auto ATPO = CGM.GetAddrOfTemplateParamObject(TPO);
+    auto AS = getLangASFromTargetAS(ATPO.getAddressSpace());
+
+    if (AS != T.getAddressSpace()) {
+      auto TargetAS = getContext().getTargetAddressSpace(T.getAddressSpace());
+      auto PtrTy = ATPO.getElementType()->getPointerTo(TargetAS);
+      auto ASC = getTargetHooks().performAddrSpaceCast(
+          CGM, ATPO.getPointer(), AS, T.getAddressSpace(), PtrTy);
+      ATPO = ConstantAddress(ASC, ATPO.getElementType(), ATPO.getAlignment());
+    }
+
+    return MakeAddrLValue(ATPO, T, AlignmentSource::Decl);
+  }
 
   llvm_unreachable("Unhandled DeclRefExpr");
 }
@@ -3017,7 +3232,7 @@ LValue CodeGenFunction::EmitUnaryOpLValue(const UnaryOperator *E) {
     // __real is valid on scalars.  This is a faster way of testing that.
     // __imag can only produce an rvalue on scalars.
     if (E->getOpcode() == UO_Real &&
-        !LV.getAddress(*this).getElementType()->isStructTy()) {
+        !LV.getAddress().getElementType()->isStructTy()) {
       assert(E->getSubExpr()->getType()->isArithmeticType());
       return LV;
     }
@@ -3026,8 +3241,8 @@ LValue CodeGenFunction::EmitUnaryOpLValue(const UnaryOperator *E) {
 
     Address Component =
         (E->getOpcode() == UO_Real
-             ? emitAddrOfRealComponent(LV.getAddress(*this), LV.getType())
-             : emitAddrOfImagComponent(LV.getAddress(*this), LV.getType()));
+             ? emitAddrOfRealComponent(LV.getAddress(), LV.getType())
+             : emitAddrOfImagComponent(LV.getAddress(), LV.getType()));
     LValue ElemLV = MakeAddrLValue(Component, T, LV.getBaseInfo(),
                                    CGM.getTBAAInfoForSubobject(LV, T));
     ElemLV.getQuals().addQualifiers(LV.getQuals());
@@ -3061,7 +3276,7 @@ LValue CodeGenFunction::EmitPredefinedLValue(const PredefinedExpr *E) {
   auto SL = E->getFunctionName();
   assert(SL != nullptr && "No StringLiteral name in PredefinedExpr");
   StringRef FnName = CurFn->getName();
-  if (FnName.startswith("\01"))
+  if (FnName.starts_with("\01"))
     FnName = FnName.substr(1);
   StringRef NameItems[] = {
       PredefinedExpr::getIdentKindName(E->getIdentKind()), FnName};
@@ -3158,7 +3373,7 @@ llvm::Value *CodeGenFunction::EmitCheckValue(llvm::Value *V) {
 
   // Pointers are passed directly, everything else is passed by address.
   if (!V->getType()->isPointerTy()) {
-    Address Ptr = CreateDefaultAlignTempAlloca(V->getType());
+    RawAddress Ptr = CreateDefaultAlignTempAlloca(V->getType());
     Builder.CreateStore(V, Ptr);
     V = Ptr.getPointer();
   }
@@ -3334,6 +3549,17 @@ void CodeGenFunction::EmitCheck(
     Cond = Cond ? Builder.CreateAnd(Cond, Check) : Check;
   }
 
+  if (ClSanitizeGuardChecks) {
+    llvm::Value *Allow =
+        Builder.CreateCall(CGM.getIntrinsic(llvm::Intrinsic::allow_ubsan_check),
+                           llvm::ConstantInt::get(CGM.Int8Ty, CheckHandler));
+
+    for (llvm::Value **Cond : {&FatalCond, &RecoverableCond, &TrapCond}) {
+      if (*Cond)
+        *Cond = Builder.CreateOr(*Cond, Builder.CreateNot(Allow));
+    }
+  }
+
   if (TrapCond)
     EmitTrapCheck(TrapCond, CheckHandler);
   if (!FatalCond && !RecoverableCond)
@@ -3360,9 +3586,8 @@ void CodeGenFunction::EmitCheck(
   llvm::BasicBlock *Handlers = createBasicBlock("handler." + CheckName);
   llvm::Instruction *Branch = Builder.CreateCondBr(JointCond, Cont, Handlers);
   // Give hint that we very much don't expect to execute the handler
-  // Value chosen to match UR_NONTAKEN_WEIGHT, see BranchProbabilityInfo.cpp
   llvm::MDBuilder MDHelper(getLLVMContext());
-  llvm::MDNode *Node = MDHelper.createBranchWeights((1U << 20) - 1, 1);
+  llvm::MDNode *Node = MDHelper.createLikelyBranchWeights();
   Branch->setMetadata(llvm::LLVMContext::MD_prof, Node);
   EmitBlock(Handlers);
 
@@ -3430,7 +3655,7 @@ void CodeGenFunction::EmitCfiSlowPathCheck(
   llvm::BranchInst *BI = Builder.CreateCondBr(Cond, Cont, CheckBB);
 
   llvm::MDBuilder MDHelper(getLLVMContext());
-  llvm::MDNode *Node = MDHelper.createBranchWeights((1U << 20) - 1, 1);
+  llvm::MDNode *Node = MDHelper.createLikelyBranchWeights();
   BI->setMetadata(llvm::LLVMContext::MD_prof, Node);
 
   EmitBlock(CheckBB);
@@ -3470,12 +3695,29 @@ void CodeGenFunction::EmitCfiSlowPathCheck(
 // symbol in LTO mode.
 void CodeGenFunction::EmitCfiCheckStub() {
   llvm::Module *M = &CGM.getModule();
-  auto &Ctx = M->getContext();
+  ASTContext &C = getContext();
+  QualType QInt64Ty = C.getIntTypeForBitwidth(64, false);
+
+  FunctionArgList FnArgs;
+  ImplicitParamDecl ArgCallsiteTypeId(C, QInt64Ty, ImplicitParamKind::Other);
+  ImplicitParamDecl ArgAddr(C, C.VoidPtrTy, ImplicitParamKind::Other);
+  ImplicitParamDecl ArgCFICheckFailData(C, C.VoidPtrTy,
+                                        ImplicitParamKind::Other);
+  FnArgs.push_back(&ArgCallsiteTypeId);
+  FnArgs.push_back(&ArgAddr);
+  FnArgs.push_back(&ArgCFICheckFailData);
+  const CGFunctionInfo &FI =
+      CGM.getTypes().arrangeBuiltinFunctionDeclaration(C.VoidTy, FnArgs);
+
   llvm::Function *F = llvm::Function::Create(
-      llvm::FunctionType::get(VoidTy, {Int64Ty, Int8PtrTy, Int8PtrTy}, false),
+      llvm::FunctionType::get(VoidTy, {Int64Ty, VoidPtrTy, VoidPtrTy}, false),
       llvm::GlobalValue::WeakAnyLinkage, "__cfi_check", M);
+  CGM.SetLLVMFunctionAttributes(GlobalDecl(), FI, F, /*IsThunk=*/false);
+  CGM.SetLLVMFunctionAttributesForDefinition(nullptr, F);
   F->setAlignment(llvm::Align(4096));
   CGM.setDSOLocal(F);
+
+  llvm::LLVMContext &Ctx = M->getContext();
   llvm::BasicBlock *BB = llvm::BasicBlock::Create(Ctx, "entry", F);
   // CrossDSOCFI pass is not executed if there is no executable code.
   SmallVector<llvm::Value*> Args{F->getArg(2), F->getArg(1)};
@@ -3595,7 +3837,7 @@ void CodeGenFunction::EmitTrapCheck(llvm::Value *Checked,
 
   // If we're optimizing, collapse all calls to trap down to just one per
   // check-type per function to save on code size.
-  if (TrapBBs.size() <= CheckHandlerID)
+  if ((int)TrapBBs.size() <= CheckHandlerID)
     TrapBBs.resize(CheckHandlerID + 1);
 
   llvm::BasicBlock *&TrapBB = TrapBBs[CheckHandlerID];
@@ -3654,7 +3896,7 @@ Address CodeGenFunction::EmitArrayToPointerDecay(const Expr *E,
 
   // Expressions of array type can't be bitfields or vector elements.
   LValue LV = EmitLValue(E);
-  Address Addr = LV.getAddress(*this);
+  Address Addr = LV.getAddress();
 
   // If the array type was an incomplete type, we need to make sure
   // the decay ends up being the right type.
@@ -3714,6 +3956,21 @@ static llvm::Value *emitArraySubscriptGEP(CodeGenFunction &CGF,
   }
 }
 
+static Address emitArraySubscriptGEP(CodeGenFunction &CGF, Address addr,
+                                     ArrayRef<llvm::Value *> indices,
+                                     llvm::Type *elementType, bool inbounds,
+                                     bool signedIndices, SourceLocation loc,
+                                     CharUnits align,
+                                     const llvm::Twine &name = "arrayidx") {
+  if (inbounds) {
+    return CGF.EmitCheckedInBoundsGEP(addr, indices, elementType, signedIndices,
+                                      CodeGenFunction::NotSubtraction, loc,
+                                      align, name);
+  } else {
+    return CGF.Builder.CreateGEP(addr, indices, elementType, align, name);
+  }
+}
+
 static CharUnits getArrayElementAlign(CharUnits arrayAlign,
                                       llvm::Value *idx,
                                       CharUnits eltSize) {
@@ -3736,6 +3993,33 @@ static QualType getFixedSizeElementType(const ASTContext &ctx,
     eltType = vla->getElementType();
   } while ((vla = ctx.getAsVariableArrayType(eltType)));
   return eltType;
+}
+
+static bool hasBPFPreserveStaticOffset(const RecordDecl *D) {
+  return D && D->hasAttr<BPFPreserveStaticOffsetAttr>();
+}
+
+static bool hasBPFPreserveStaticOffset(const Expr *E) {
+  if (!E)
+    return false;
+  QualType PointeeType = E->getType()->getPointeeType();
+  if (PointeeType.isNull())
+    return false;
+  if (const auto *BaseDecl = PointeeType->getAsRecordDecl())
+    return hasBPFPreserveStaticOffset(BaseDecl);
+  return false;
+}
+
+// Wraps Addr with a call to llvm.preserve.static.offset intrinsic.
+static Address wrapWithBPFPreserveStaticOffset(CodeGenFunction &CGF,
+                                               Address &Addr) {
+  if (!CGF.getTarget().getTriple().isBPF())
+    return Addr;
+
+  llvm::Function *Fn =
+      CGF.CGM.getIntrinsic(llvm::Intrinsic::preserve_static_offset);
+  llvm::CallInst *Call = CGF.Builder.CreateCall(Fn, {Addr.emitRawPointer(CGF)});
+  return Address(Call, Addr.getElementType(), Addr.getAlignment());
 }
 
 /// Given an array base, check whether its member access belongs to a record
@@ -3797,28 +4081,86 @@ static Address emitArraySubscriptGEP(CodeGenFunction &CGF, Address addr,
   // We can use that to compute the best alignment of the element.
   CharUnits eltSize = CGF.getContext().getTypeSizeInChars(eltType);
   CharUnits eltAlign =
-    getArrayElementAlign(addr.getAlignment(), indices.back(), eltSize);
+      getArrayElementAlign(addr.getAlignment(), indices.back(), eltSize);
+
+  if (hasBPFPreserveStaticOffset(Base))
+    addr = wrapWithBPFPreserveStaticOffset(CGF, addr);
 
   llvm::Value *eltPtr;
   auto LastIndex = dyn_cast<llvm::ConstantInt>(indices.back());
   if (!LastIndex ||
       (!CGF.IsInPreservedAIRegion && !IsPreserveAIArrayBase(CGF, Base))) {
-    eltPtr = emitArraySubscriptGEP(
-        CGF, addr.getElementType(), addr.getPointer(), indices, inbounds,
-        signedIndices, loc, name);
+    addr = emitArraySubscriptGEP(CGF, addr, indices,
+                                 CGF.ConvertTypeForMem(eltType), inbounds,
+                                 signedIndices, loc, eltAlign, name);
+    return addr;
   } else {
     // Remember the original array subscript for bpf target
     unsigned idx = LastIndex->getZExtValue();
     llvm::DIType *DbgInfo = nullptr;
     if (arrayType)
       DbgInfo = CGF.getDebugInfo()->getOrCreateStandaloneType(*arrayType, loc);
-    eltPtr = CGF.Builder.CreatePreserveArrayAccessIndex(addr.getElementType(),
-                                                        addr.getPointer(),
-                                                        indices.size() - 1,
-                                                        idx, DbgInfo);
+    eltPtr = CGF.Builder.CreatePreserveArrayAccessIndex(
+        addr.getElementType(), addr.emitRawPointer(CGF), indices.size() - 1,
+        idx, DbgInfo);
   }
 
   return Address(eltPtr, CGF.ConvertTypeForMem(eltType), eltAlign);
+}
+
+/// The offset of a field from the beginning of the record.
+static bool getFieldOffsetInBits(CodeGenFunction &CGF, const RecordDecl *RD,
+                                 const FieldDecl *FD, int64_t &Offset) {
+  ASTContext &Ctx = CGF.getContext();
+  const ASTRecordLayout &Layout = Ctx.getASTRecordLayout(RD);
+  unsigned FieldNo = 0;
+
+  for (const Decl *D : RD->decls()) {
+    if (const auto *Record = dyn_cast<RecordDecl>(D))
+      if (getFieldOffsetInBits(CGF, Record, FD, Offset)) {
+        Offset += Layout.getFieldOffset(FieldNo);
+        return true;
+      }
+
+    if (const auto *Field = dyn_cast<FieldDecl>(D))
+      if (FD == Field) {
+        Offset += Layout.getFieldOffset(FieldNo);
+        return true;
+      }
+
+    if (isa<FieldDecl>(D))
+      ++FieldNo;
+  }
+
+  return false;
+}
+
+/// Returns the relative offset difference between \p FD1 and \p FD2.
+/// \code
+///   offsetof(struct foo, FD1) - offsetof(struct foo, FD2)
+/// \endcode
+/// Both fields must be within the same struct.
+static std::optional<int64_t> getOffsetDifferenceInBits(CodeGenFunction &CGF,
+                                                        const FieldDecl *FD1,
+                                                        const FieldDecl *FD2) {
+  const RecordDecl *FD1OuterRec =
+      FD1->getParent()->getOuterLexicalRecordContext();
+  const RecordDecl *FD2OuterRec =
+      FD2->getParent()->getOuterLexicalRecordContext();
+
+  if (FD1OuterRec != FD2OuterRec)
+    // Fields must be within the same RecordDecl.
+    return std::optional<int64_t>();
+
+  int64_t FD1Offset = 0;
+  if (!getFieldOffsetInBits(CGF, FD1OuterRec, FD1, FD1Offset))
+    return std::optional<int64_t>();
+
+  int64_t FD2Offset = 0;
+  if (!getFieldOffsetInBits(CGF, FD2OuterRec, FD2, FD2Offset))
+    return std::optional<int64_t>();
+
+  return std::make_optional<int64_t>(FD1Offset - FD2Offset);
 }
 
 LValue CodeGenFunction::EmitArraySubscriptExpr(const ArraySubscriptExpr *E,
@@ -3852,15 +4194,14 @@ LValue CodeGenFunction::EmitArraySubscriptExpr(const ArraySubscriptExpr *E,
 
   // If the base is a vector type, then we are forming a vector element lvalue
   // with this subscript.
-  if (E->getBase()->getType()->isVectorType() &&
+  if (E->getBase()->getType()->isSubscriptableVectorType() &&
       !isa<ExtVectorElementExpr>(E->getBase())) {
     // Emit the vector as an lvalue to get its address.
     LValue LHS = EmitLValue(E->getBase());
     auto *Idx = EmitIdxAfterBase(/*Promote*/false);
     assert(LHS.isSimple() && "Can only subscript lvalue vectors here!");
-    return LValue::MakeVectorElt(LHS.getAddress(*this), Idx,
-                                 E->getBase()->getType(), LHS.getBaseInfo(),
-                                 TBAAAccessInfo());
+    return LValue::MakeVectorElt(LHS.getAddress(), Idx, E->getBase()->getType(),
+                                 LHS.getBaseInfo(), TBAAAccessInfo());
   }
 
   // All the other cases basically behave like simple offsetting.
@@ -3929,8 +4270,8 @@ LValue CodeGenFunction::EmitArraySubscriptExpr(const ArraySubscriptExpr *E,
     CharUnits EltAlign =
       getArrayElementAlign(Addr.getAlignment(), Idx, InterfaceSize);
     llvm::Value *EltPtr =
-        emitArraySubscriptGEP(*this, Int8Ty, Addr.getPointer(), ScaledIdx,
-                              false, SignedIndices, E->getExprLoc());
+        emitArraySubscriptGEP(*this, Int8Ty, Addr.emitRawPointer(*this),
+                              ScaledIdx, false, SignedIndices, E->getExprLoc());
     Addr = Address(EltPtr, OrigBaseElemTy, EltAlign);
   } else if (const Expr *Array = isSimpleArrayDecayOperand(E->getBase())) {
     // If this is A[i] where A is an array, the frontend will have decayed the
@@ -3948,10 +4289,51 @@ LValue CodeGenFunction::EmitArraySubscriptExpr(const ArraySubscriptExpr *E,
       ArrayLV = EmitLValue(Array);
     auto *Idx = EmitIdxAfterBase(/*Promote*/true);
 
+    if (SanOpts.has(SanitizerKind::ArrayBounds)) {
+      // If the array being accessed has a "counted_by" attribute, generate
+      // bounds checking code. The "count" field is at the top level of the
+      // struct or in an anonymous struct, that's also at the top level. Future
+      // expansions may allow the "count" to reside at any place in the struct,
+      // but the value of "counted_by" will be a "simple" path to the count,
+      // i.e. "a.b.count", so we shouldn't need the full force of EmitLValue or
+      // similar to emit the correct GEP.
+      const LangOptions::StrictFlexArraysLevelKind StrictFlexArraysLevel =
+          getLangOpts().getStrictFlexArraysLevel();
+
+      if (const auto *ME = dyn_cast<MemberExpr>(Array);
+          ME &&
+          ME->isFlexibleArrayMemberLike(getContext(), StrictFlexArraysLevel) &&
+          ME->getMemberDecl()->getType()->isCountAttributedType()) {
+        const FieldDecl *FAMDecl = dyn_cast<FieldDecl>(ME->getMemberDecl());
+        if (const FieldDecl *CountFD = FindCountedByField(FAMDecl)) {
+          if (std::optional<int64_t> Diff =
+                  getOffsetDifferenceInBits(*this, CountFD, FAMDecl)) {
+            CharUnits OffsetDiff = CGM.getContext().toCharUnitsFromBits(*Diff);
+
+            // Create a GEP with a byte offset between the FAM and count and
+            // use that to load the count value.
+            Addr = Builder.CreatePointerBitCastOrAddrSpaceCast(
+                ArrayLV.getAddress(), Int8PtrTy, Int8Ty);
+
+            llvm::Type *CountTy = ConvertType(CountFD->getType());
+            llvm::Value *Res = Builder.CreateInBoundsGEP(
+                Int8Ty, Addr.emitRawPointer(*this),
+                Builder.getInt32(OffsetDiff.getQuantity()), ".counted_by.gep");
+            Res = Builder.CreateAlignedLoad(CountTy, Res, getIntAlign(),
+                                            ".counted_by.load");
+
+            // Now emit the bounds checking.
+            EmitBoundsCheckImpl(E, Res, Idx, E->getIdx()->getType(),
+                                Array->getType(), Accessed);
+          }
+        }
+      }
+    }
+
     // Propagate the alignment from the array itself to the result.
     QualType arrayType = Array->getType();
     Addr = emitArraySubscriptGEP(
-        *this, ArrayLV.getAddress(*this), {CGM.getSize(CharUnits::Zero()), Idx},
+        *this, ArrayLV.getAddress(), {CGM.getSize(CharUnits::Zero()), Idx},
         E->getType(), !getLangOpts().isSignedOverflowDefined(), SignedIndices,
         E->getExprLoc(), &arrayType, E->getBase());
     EltBaseInfo = ArrayLV.getBaseInfo();
@@ -3990,7 +4372,7 @@ LValue CodeGenFunction::EmitMatrixSubscriptExpr(const MatrixSubscriptExpr *E) {
   llvm::Value *FinalIdx =
       Builder.CreateAdd(Builder.CreateMul(ColIdx, NumRows), RowIdx);
   return LValue::MakeMatrixElt(
-      MaybeConvertMatrixAddress(Base.getAddress(*this), *this), FinalIdx,
+      MaybeConvertMatrixAddress(Base.getAddress(), *this), FinalIdx,
       E->getBase()->getType(), Base.getBaseInfo(), TBAAAccessInfo());
 }
 
@@ -4000,10 +4382,10 @@ static Address emitOMPArraySectionBase(CodeGenFunction &CGF, const Expr *Base,
                                        QualType BaseTy, QualType ElTy,
                                        bool IsLowerBound) {
   LValue BaseLVal;
-  if (auto *ASE = dyn_cast<OMPArraySectionExpr>(Base->IgnoreParenImpCasts())) {
-    BaseLVal = CGF.EmitOMPArraySectionExpr(ASE, IsLowerBound);
+  if (auto *ASE = dyn_cast<ArraySectionExpr>(Base->IgnoreParenImpCasts())) {
+    BaseLVal = CGF.EmitArraySectionExpr(ASE, IsLowerBound);
     if (BaseTy->isArrayType()) {
-      Address Addr = BaseLVal.getAddress(CGF);
+      Address Addr = BaseLVal.getAddress();
       BaseInfo = BaseLVal.getBaseInfo();
 
       // If the array type was an incomplete type, we need to make sure
@@ -4027,15 +4409,19 @@ static Address emitOMPArraySectionBase(CodeGenFunction &CGF, const Expr *Base,
         CGF.CGM.getNaturalTypeAlignment(ElTy, &TypeBaseInfo, &TypeTBAAInfo);
     BaseInfo.mergeForCast(TypeBaseInfo);
     TBAAInfo = CGF.CGM.mergeTBAAInfoForCast(TBAAInfo, TypeTBAAInfo);
-    return Address(CGF.Builder.CreateLoad(BaseLVal.getAddress(CGF)),
+    return Address(CGF.Builder.CreateLoad(BaseLVal.getAddress()),
                    CGF.ConvertTypeForMem(ElTy), Align);
   }
   return CGF.EmitPointerWithAlignment(Base, &BaseInfo, &TBAAInfo);
 }
 
-LValue CodeGenFunction::EmitOMPArraySectionExpr(const OMPArraySectionExpr *E,
-                                                bool IsLowerBound) {
-  QualType BaseTy = OMPArraySectionExpr::getBaseOriginalType(E->getBase());
+LValue CodeGenFunction::EmitArraySectionExpr(const ArraySectionExpr *E,
+                                             bool IsLowerBound) {
+
+  assert(!E->isOpenACCArraySection() &&
+         "OpenACC Array section codegen not implemented");
+
+  QualType BaseTy = ArraySectionExpr::getBaseOriginalType(E->getBase());
   QualType ResultExprTy;
   if (auto *AT = getContext().getAsArrayType(BaseTy))
     ResultExprTy = AT->getElementType();
@@ -4175,15 +4561,15 @@ LValue CodeGenFunction::EmitOMPArraySectionExpr(const OMPArraySectionExpr *E,
 
     // Propagate the alignment from the array itself to the result.
     EltPtr = emitArraySubscriptGEP(
-        *this, ArrayLV.getAddress(*this), {CGM.getSize(CharUnits::Zero()), Idx},
+        *this, ArrayLV.getAddress(), {CGM.getSize(CharUnits::Zero()), Idx},
         ResultExprTy, !getLangOpts().isSignedOverflowDefined(),
         /*signedIndices=*/false, E->getExprLoc());
     BaseInfo = ArrayLV.getBaseInfo();
     TBAAInfo = CGM.getTBAAInfoForSubobject(ArrayLV, ResultExprTy);
   } else {
-    Address Base = emitOMPArraySectionBase(*this, E->getBase(), BaseInfo,
-                                           TBAAInfo, BaseTy, ResultExprTy,
-                                           IsLowerBound);
+    Address Base =
+        emitOMPArraySectionBase(*this, E->getBase(), BaseInfo, TBAAInfo, BaseTy,
+                                ResultExprTy, IsLowerBound);
     EltPtr = emitArraySubscriptGEP(*this, Base, Idx, ResultExprTy,
                                    !getLangOpts().isSignedOverflowDefined(),
                                    /*signedIndices=*/false, E->getExprLoc());
@@ -4235,7 +4621,7 @@ EmitExtVectorElementExpr(const ExtVectorElementExpr *E) {
   if (Base.isSimple()) {
     llvm::Constant *CV =
         llvm::ConstantDataVector::get(getLLVMContext(), Indices);
-    return LValue::MakeExtVectorElt(Base.getAddress(*this), CV, type,
+    return LValue::MakeExtVectorElt(Base.getAddress(), CV, type,
                                     Base.getBaseInfo(), TBAAAccessInfo());
   }
   assert(Base.isExtVectorElt() && "Can only subscript lvalue vec elts here!");
@@ -4270,7 +4656,7 @@ LValue CodeGenFunction::EmitMemberExpr(const MemberExpr *E) {
       SkippedChecks.set(SanitizerKind::Alignment, true);
     if (IsBaseCXXThis || isa<DeclRefExpr>(BaseExpr))
       SkippedChecks.set(SanitizerKind::Null, true);
-    EmitTypeCheck(TCK_MemberAccess, E->getExprLoc(), Addr.getPointer(), PtrTy,
+    EmitTypeCheck(TCK_MemberAccess, E->getExprLoc(), Addr, PtrTy,
                   /*Alignment=*/CharUnits::Zero(), SkippedChecks);
     BaseLV = MakeAddrLValue(Addr, PtrTy, BaseInfo, TBAAInfo);
   } else
@@ -4304,7 +4690,8 @@ LValue CodeGenFunction::EmitMemberExpr(const MemberExpr *E) {
 LValue CodeGenFunction::EmitLValueForLambdaField(const FieldDecl *Field,
                                                  llvm::Value *ThisValue) {
   bool HasExplicitObjectParameter = false;
-  if (const auto *MD = dyn_cast_if_present<CXXMethodDecl>(CurCodeDecl)) {
+  const auto *MD = dyn_cast_if_present<CXXMethodDecl>(CurCodeDecl);
+  if (MD) {
     HasExplicitObjectParameter = MD->isExplicitObjectMemberFunction();
     assert(MD->getParent()->isLambda());
     assert(MD->getParent() == Field->getParent());
@@ -4319,8 +4706,19 @@ LValue CodeGenFunction::EmitLValueForLambdaField(const FieldDecl *Field,
       LambdaLV = EmitLoadOfReferenceLValue(AddrOfExplicitObject, D->getType(),
                                            AlignmentSource::Decl);
     else
-      LambdaLV = MakeNaturalAlignAddrLValue(AddrOfExplicitObject.getPointer(),
-                                            D->getType().getNonReferenceType());
+      LambdaLV = MakeAddrLValue(AddrOfExplicitObject,
+                                D->getType().getNonReferenceType());
+
+    // Make sure we have an lvalue to the lambda itself and not a derived class.
+    auto *ThisTy = D->getType().getNonReferenceType()->getAsCXXRecordDecl();
+    auto *LambdaTy = cast<CXXRecordDecl>(Field->getParent());
+    if (ThisTy != LambdaTy) {
+      const CXXCastPath &BasePathArray = getContext().LambdaCastPaths.at(MD);
+      Address Base = GetAddressOfBaseClass(
+          LambdaLV.getAddress(), ThisTy, BasePathArray.begin(),
+          BasePathArray.end(), /*NullCheckValue=*/false, SourceLocation());
+      LambdaLV = MakeAddrLValue(Base, QualType{LambdaTy->getTypeForDecl(), 0});
+    }
   } else {
     QualType LambdaTagType = getContext().getTagDeclType(Field->getParent());
     LambdaLV = MakeNaturalAlignAddrLValue(ThisValue, LambdaTagType);
@@ -4341,7 +4739,7 @@ unsigned CodeGenFunction::getDebugInfoFIndex(const RecordDecl *Rec,
   for (auto *F : Rec->getDefinition()->fields()) {
     if (I == FieldIndex)
       break;
-    if (F->isUnnamedBitfield())
+    if (F->isUnnamedBitField())
       Skipped++;
     I++;
   }
@@ -4424,9 +4822,11 @@ LValue CodeGenFunction::EmitLValueForField(LValue base,
                              field->getType()
                                  .withCVRQualifiers(base.getVRQualifiers())
                                  .isVolatileQualified();
-    Address Addr = base.getAddress(*this);
+    Address Addr = base.getAddress();
     unsigned Idx = RL.getLLVMFieldNo(field);
     const RecordDecl *rec = field->getParent();
+    if (hasBPFPreserveStaticOffset(rec))
+      Addr = wrapWithBPFPreserveStaticOffset(*this, Addr);
     if (!UseVolatile) {
       if (!IsInPreservedAIRegion &&
           (!getDebugInfo() || !rec->hasAttr<BPFPreserveAccessIndexAttr>())) {
@@ -4498,7 +4898,9 @@ LValue CodeGenFunction::EmitLValueForField(LValue base,
         getContext().getTypeSizeInChars(FieldType).getQuantity();
   }
 
-  Address addr = base.getAddress(*this);
+  Address addr = base.getAddress();
+  if (hasBPFPreserveStaticOffset(rec))
+    addr = wrapWithBPFPreserveStaticOffset(*this, addr);
   if (auto *ClassDef = dyn_cast<CXXRecordDecl>(rec)) {
     if (CGM.getCodeGenOpts().StrictVTablePointers &&
         ClassDef->isDynamicClass()) {
@@ -4506,7 +4908,8 @@ LValue CodeGenFunction::EmitLValueForField(LValue base,
       // information provided by invariant.group.  This is because accessing
       // fields may leak the real address of dynamic object, which could result
       // in miscompilation when leaked pointer would be compared.
-      auto *stripped = Builder.CreateStripInvariantGroup(addr.getPointer());
+      auto *stripped =
+          Builder.CreateStripInvariantGroup(addr.emitRawPointer(*this));
       addr = Address(stripped, addr.getElementType(), addr.getAlignment());
     }
   }
@@ -4525,10 +4928,11 @@ LValue CodeGenFunction::EmitLValueForField(LValue base,
       // Remember the original union field index
       llvm::DIType *DbgInfo = getDebugInfo()->getOrCreateStandaloneType(base.getType(),
           rec->getLocation());
-      addr = Address(
-          Builder.CreatePreserveUnionAccessIndex(
-              addr.getPointer(), getDebugInfoFIndex(rec, field->getFieldIndex()), DbgInfo),
-          addr.getElementType(), addr.getAlignment());
+      addr =
+          Address(Builder.CreatePreserveUnionAccessIndex(
+                      addr.emitRawPointer(*this),
+                      getDebugInfoFIndex(rec, field->getFieldIndex()), DbgInfo),
+                  addr.getElementType(), addr.getAlignment());
     }
 
     if (FieldType->isReferenceType())
@@ -4581,7 +4985,7 @@ CodeGenFunction::EmitLValueForFieldInitialization(LValue Base,
   if (!FieldType->isReferenceType())
     return EmitLValueForField(Base, Field);
 
-  Address V = emitAddrOfFieldStorage(*this, Base.getAddress(*this), Field);
+  Address V = emitAddrOfFieldStorage(*this, Base.getAddress(), Field);
 
   // Make sure that the address is pointing to the right type.
   llvm::Type *llvmType = ConvertTypeForMem(FieldType);
@@ -4763,13 +5167,11 @@ LValue CodeGenFunction::EmitConditionalOperatorLValue(
     return EmitUnsupportedLValue(expr, "conditional operator");
 
   if (Info.LHS && Info.RHS) {
-    Address lhsAddr = Info.LHS->getAddress(*this);
-    Address rhsAddr = Info.RHS->getAddress(*this);
-    llvm::PHINode *phi = Builder.CreatePHI(lhsAddr.getType(), 2, "cond-lvalue");
-    phi->addIncoming(lhsAddr.getPointer(), Info.lhsBlock);
-    phi->addIncoming(rhsAddr.getPointer(), Info.rhsBlock);
-    Address result(phi, lhsAddr.getElementType(),
-                   std::min(lhsAddr.getAlignment(), rhsAddr.getAlignment()));
+    Address lhsAddr = Info.LHS->getAddress();
+    Address rhsAddr = Info.RHS->getAddress();
+    Address result = mergeAddressesInConditionalExpr(
+        lhsAddr, rhsAddr, Info.lhsBlock, Info.rhsBlock,
+        Builder.GetInsertBlock(), expr->getType());
     AlignmentSource alignSource =
         std::max(Info.LHS->getBaseInfo().getAlignmentSource(),
                  Info.RHS->getBaseInfo().getAlignmentSource());
@@ -4803,7 +5205,6 @@ LValue CodeGenFunction::EmitCastLValue(const CastExpr *E) {
   case CK_IntegralToPointer:
   case CK_PointerToIntegral:
   case CK_PointerToBoolean:
-  case CK_VectorSplat:
   case CK_IntegralCast:
   case CK_BooleanToSignedIntegral:
   case CK_IntegralToBoolean:
@@ -4839,6 +5240,8 @@ LValue CodeGenFunction::EmitCastLValue(const CastExpr *E) {
   case CK_FixedPointToIntegral:
   case CK_IntegralToFixedPoint:
   case CK_MatrixCast:
+  case CK_HLSLVectorTruncation:
+  case CK_HLSLArrayRValue:
     return EmitUnsupportedLValue(E, "unexpected cast lvalue");
 
   case CK_Dependent:
@@ -4854,9 +5257,9 @@ LValue CodeGenFunction::EmitCastLValue(const CastExpr *E) {
 
   case CK_Dynamic: {
     LValue LV = EmitLValue(E->getSubExpr());
-    Address V = LV.getAddress(*this);
+    Address V = LV.getAddress();
     const auto *DCE = cast<CXXDynamicCastExpr>(E);
-    return MakeNaturalAlignAddrLValue(EmitDynamicCast(V, DCE), E->getType());
+    return MakeNaturalAlignRawAddrLValue(EmitDynamicCast(V, DCE), E->getType());
   }
 
   case CK_ConstructorConversion:
@@ -4875,7 +5278,7 @@ LValue CodeGenFunction::EmitCastLValue(const CastExpr *E) {
     if (E->changesVolatileQualification())
       LV.getQuals() = E->getType().getQualifiers();
     if (LV.isSimple()) {
-      Address V = LV.getAddress(*this);
+      Address V = LV.getAddress();
       if (V.isValid()) {
         llvm::Type *T = ConvertTypeForMem(E->getType());
         if (V.getElementType() != T)
@@ -4892,7 +5295,7 @@ LValue CodeGenFunction::EmitCastLValue(const CastExpr *E) {
     auto *DerivedClassDecl = cast<CXXRecordDecl>(DerivedClassTy->getDecl());
 
     LValue LV = EmitLValue(E->getSubExpr());
-    Address This = LV.getAddress(*this);
+    Address This = LV.getAddress();
 
     // Perform the derived-to-base conversion
     Address Base = GetAddressOfBaseClass(
@@ -4915,14 +5318,14 @@ LValue CodeGenFunction::EmitCastLValue(const CastExpr *E) {
 
     // Perform the base-to-derived conversion
     Address Derived = GetAddressOfDerivedClass(
-        LV.getAddress(*this), DerivedClassDecl, E->path_begin(), E->path_end(),
+        LV.getAddress(), DerivedClassDecl, E->path_begin(), E->path_end(),
         /*NullCheckValue=*/false);
 
     // C++11 [expr.static.cast]p2: Behavior is undefined if a downcast is
     // performed and the object is not of the derived type.
     if (sanitizePerformTypeCheck())
-      EmitTypeCheck(TCK_DowncastReference, E->getExprLoc(),
-                    Derived.getPointer(), E->getType());
+      EmitTypeCheck(TCK_DowncastReference, E->getExprLoc(), Derived,
+                    E->getType());
 
     if (SanOpts.has(SanitizerKind::CFIDerivedCast))
       EmitVTablePtrCheckForCast(E->getType(), Derived,
@@ -4938,7 +5341,7 @@ LValue CodeGenFunction::EmitCastLValue(const CastExpr *E) {
 
     CGM.EmitExplicitCastExprType(CE, this);
     LValue LV = EmitLValue(E->getSubExpr());
-    Address V = LV.getAddress(*this).withElementType(
+    Address V = LV.getAddress().withElementType(
         ConvertTypeForMem(CE->getTypeAsWritten()->getPointeeType()));
 
     if (SanOpts.has(SanitizerKind::CFIUnrelatedCast))
@@ -4957,17 +5360,24 @@ LValue CodeGenFunction::EmitCastLValue(const CastExpr *E) {
         E->getSubExpr()->getType().getAddressSpace(),
         E->getType().getAddressSpace(), ConvertType(DestTy));
     return MakeAddrLValue(Address(V, ConvertTypeForMem(E->getType()),
-                                  LV.getAddress(*this).getAlignment()),
+                                  LV.getAddress().getAlignment()),
                           E->getType(), LV.getBaseInfo(), LV.getTBAAInfo());
   }
   case CK_ObjCObjectLValueCast: {
     LValue LV = EmitLValue(E->getSubExpr());
-    Address V = LV.getAddress(*this).withElementType(ConvertType(E->getType()));
+    Address V = LV.getAddress().withElementType(ConvertType(E->getType()));
     return MakeAddrLValue(V, E->getType(), LV.getBaseInfo(),
                           CGM.getTBAAInfoForSubobject(LV, E->getType()));
   }
   case CK_ZeroToOCLOpaqueType:
     llvm_unreachable("NULL to OpenCL opaque type lvalue cast is not valid");
+
+  case CK_VectorSplat: {
+    // LValue results of vector splats are only supported in HLSL.
+    if (!getLangOpts().HLSL)
+      return EmitUnsupportedLValue(E, "unexpected cast lvalue");
+    return EmitLValue(E->getSubExpr());
+  }
   }
 
   llvm_unreachable("Unhandled lvalue cast kind?");
@@ -5015,7 +5425,7 @@ RValue CodeGenFunction::EmitRValueForField(LValue LV,
   case TEK_Complex:
     return RValue::getComplex(EmitLoadOfComplex(FieldLV, Loc));
   case TEK_Aggregate:
-    return FieldLV.asAggregateRValue(*this);
+    return FieldLV.asAggregateRValue();
   case TEK_Scalar:
     // This routine is used to load fields one-by-one to perform a copy, so
     // don't load reference fields.
@@ -5222,11 +5632,44 @@ LValue CodeGenFunction::EmitBinaryOperatorLValue(const BinaryOperator *E) {
       break;
     }
 
-    RValue RV = EmitAnyExpr(E->getRHS());
+    // TODO: Can we de-duplicate this code with the corresponding code in
+    // CGExprScalar, similar to the way EmitCompoundAssignmentLValue works?
+    RValue RV;
+    llvm::Value *Previous = nullptr;
+    QualType SrcType = E->getRHS()->getType();
+    // Check if LHS is a bitfield, if RHS contains an implicit cast expression
+    // we want to extract that value and potentially (if the bitfield sanitizer
+    // is enabled) use it to check for an implicit conversion.
+    if (E->getLHS()->refersToBitField()) {
+      llvm::Value *RHS =
+          EmitWithOriginalRHSBitfieldAssignment(E, &Previous, &SrcType);
+      RV = RValue::get(RHS);
+    } else
+      RV = EmitAnyExpr(E->getRHS());
+
     LValue LV = EmitCheckedLValue(E->getLHS(), TCK_Store);
+
     if (RV.isScalar())
       EmitNullabilityCheck(LV, RV.getScalarVal(), E->getExprLoc());
-    EmitStoreThroughLValue(RV, LV);
+
+    if (LV.isBitField()) {
+      llvm::Value *Result = nullptr;
+      // If bitfield sanitizers are enabled we want to use the result
+      // to check whether a truncation or sign change has occurred.
+      if (SanOpts.has(SanitizerKind::ImplicitBitfieldConversion))
+        EmitStoreThroughBitfieldLValue(RV, LV, &Result);
+      else
+        EmitStoreThroughBitfieldLValue(RV, LV);
+
+      // If the expression contained an implicit conversion, make sure
+      // to use the value before the scalar conversion.
+      llvm::Value *Src = Previous ? Previous : RV.getScalarVal();
+      QualType DstType = E->getLHS()->getType();
+      EmitBitfieldConversionCheck(Src, SrcType, Result, DstType,
+                                  LV.getBitFieldInfo(), E->getExprLoc());
+    } else
+      EmitStoreThroughLValue(RV, LV);
+
     if (getLangOpts().OpenMP)
       CGM.getOpenMPRuntime().checkAndEmitLastprivateConditional(*this,
                                                                 E->getLHS());
@@ -5271,7 +5714,7 @@ LValue CodeGenFunction::EmitCXXConstructLValue(const CXXConstructExpr *E) {
 
 LValue
 CodeGenFunction::EmitCXXTypeidLValue(const CXXTypeidExpr *E) {
-  return MakeNaturalAlignAddrLValue(EmitCXXTypeidExpr(E), E->getType());
+  return MakeNaturalAlignRawAddrLValue(EmitCXXTypeidExpr(E), E->getType());
 }
 
 Address CodeGenFunction::EmitCXXUuidofExpr(const CXXUuidofExpr *E) {
@@ -5500,6 +5943,7 @@ RValue CodeGenFunction::EmitCall(QualType CalleeType, const CGCallee &OrigCallee
   // destruction order is not necessarily reverse construction order.
   // FIXME: Revisit this based on C++ committee response to unimplementability.
   EvaluationOrder Order = EvaluationOrder::Default;
+  bool StaticOperator = false;
   if (auto *OCE = dyn_cast<CXXOperatorCallExpr>(E)) {
     if (OCE->isAssignmentOp())
       Order = EvaluationOrder::ForceRightToLeft;
@@ -5517,10 +5961,22 @@ RValue CodeGenFunction::EmitCall(QualType CalleeType, const CGCallee &OrigCallee
         break;
       }
     }
+
+    if (const auto *MD =
+            dyn_cast_if_present<CXXMethodDecl>(OCE->getCalleeDecl());
+        MD && MD->isStatic())
+      StaticOperator = true;
   }
 
-  EmitCallArgs(Args, dyn_cast<FunctionProtoType>(FnType), E->arguments(),
-               E->getDirectCallee(), /*ParamsToSkip*/ 0, Order);
+  auto Arguments = E->arguments();
+  if (StaticOperator) {
+    // If we're calling a static operator, we need to emit the object argument
+    // and ignore it.
+    EmitIgnoredExpr(E->getArg(0));
+    Arguments = drop_begin(Arguments, 1);
+  }
+  EmitCallArgs(Args, dyn_cast<FunctionProtoType>(FnType), Arguments,
+               E->getDirectCallee(), /*ParamsToSkip=*/0, Order);
 
   const CGFunctionInfo &FnInfo = CGM.getTypes().arrangeFreeFunctionCall(
       Args, FnType, /*ChainCall=*/Chain);
@@ -5591,7 +6047,7 @@ EmitPointerToDataMemberBinaryExpr(const BinaryOperator *E) {
   if (E->getOpcode() == BO_PtrMemI) {
     BaseAddr = EmitPointerWithAlignment(E->getLHS());
   } else {
-    BaseAddr = EmitLValue(E->getLHS()).getAddress(*this);
+    BaseAddr = EmitLValue(E->getLHS()).getAddress();
   }
 
   llvm::Value *OffsetV = EmitScalarExpr(E->getRHS());
@@ -5616,7 +6072,7 @@ RValue CodeGenFunction::convertTempToRValue(Address addr,
   case TEK_Complex:
     return RValue::getComplex(EmitLoadOfComplex(lvalue, loc));
   case TEK_Aggregate:
-    return lvalue.asAggregateRValue(*this);
+    return lvalue.asAggregateRValue();
   case TEK_Scalar:
     return RValue::get(EmitLoadOfScalar(lvalue, loc));
   }

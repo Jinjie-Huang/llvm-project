@@ -23,6 +23,7 @@
 #include "lldb/Core/PluginInterface.h"
 
 #include "Plugins/ExpressionParser/Clang/ClangASTImporter.h"
+#include "Plugins/Language/ObjC/ObjCLanguage.h"
 #include "Plugins/TypeSystem/Clang/TypeSystemClang.h"
 
 #include <optional>
@@ -175,6 +176,7 @@ protected:
       lldb_private::CompilerType &class_compiler_type,
       std::vector<std::unique_ptr<clang::CXXBaseSpecifier>> &base_classes,
       std::vector<lldb_private::plugin::dwarf::DWARFDIE> &member_function_dies,
+      std::vector<lldb_private::plugin::dwarf::DWARFDIE> &contained_type_dies,
       DelayedPropertyList &delayed_properties,
       const lldb::AccessType default_accessibility,
       lldb_private::ClangASTImporter::LayoutInfo &layout_info);
@@ -271,6 +273,30 @@ private:
     }
   };
 
+  /// Parsed form of all attributes that are relevant for parsing type members.
+  struct MemberAttributes {
+    explicit MemberAttributes(
+        const lldb_private::plugin::dwarf::DWARFDIE &die,
+        const lldb_private::plugin::dwarf::DWARFDIE &parent_die,
+        lldb::ModuleSP module_sp);
+    const char *name = nullptr;
+    /// Indicates how many bits into the word (according to the host endianness)
+    /// the low-order bit of the field starts. Can be negative.
+    int64_t bit_offset = 0;
+    /// Indicates the size of the field in bits.
+    size_t bit_size = 0;
+    uint64_t data_bit_offset = UINT64_MAX;
+    lldb::AccessType accessibility = lldb::eAccessNone;
+    std::optional<uint64_t> byte_size;
+    std::optional<lldb_private::plugin::dwarf::DWARFFormValue> const_value_form;
+    lldb_private::plugin::dwarf::DWARFFormValue encoding_form;
+    /// Indicates the byte offset of the word from the base address of the
+    /// structure.
+    uint32_t member_byte_offset = UINT32_MAX;
+    bool is_artificial = false;
+    bool is_declaration = false;
+  };
+
   /// Returns 'true' if we should create an unnamed bitfield
   /// and add it to the parser's current AST.
   ///
@@ -313,6 +339,22 @@ private:
                     lldb_private::ClangASTImporter::LayoutInfo &layout_info,
                     FieldInfo &last_field_info);
 
+  /// If the specified 'die' represents a static data member, creates
+  /// a 'clang::VarDecl' for it and attaches it to specified parent
+  /// 'class_clang_type'.
+  ///
+  /// \param[in] die The member declaration we want to create a
+  ///                clang::VarDecl for.
+  ///
+  /// \param[in] attrs The parsed attributes for the specified 'die'.
+  ///
+  /// \param[in] class_clang_type The parent RecordType of the static
+  ///                             member this function will create.
+  void CreateStaticMemberVariable(
+      const lldb_private::plugin::dwarf::DWARFDIE &die,
+      const MemberAttributes &attrs,
+      const lldb_private::CompilerType &class_clang_type);
+
   bool CompleteRecordType(const lldb_private::plugin::dwarf::DWARFDIE &die,
                           lldb_private::Type *type,
                           lldb_private::CompilerType &clang_type);
@@ -328,7 +370,57 @@ private:
                          const lldb_private::plugin::dwarf::DWARFDIE &die,
                          ParsedDWARFTypeAttributes &attrs);
   lldb::TypeSP ParseSubroutine(const lldb_private::plugin::dwarf::DWARFDIE &die,
-                               ParsedDWARFTypeAttributes &attrs);
+                               const ParsedDWARFTypeAttributes &attrs);
+
+  /// Helper function called by \ref ParseSubroutine when parsing ObjC-methods.
+  ///
+  /// \param[in] objc_method Name of the ObjC method being parsed.
+  ///
+  /// \param[in] die The DIE that represents the ObjC method being parsed.
+  ///
+  /// \param[in] clang_type The CompilerType representing the function prototype
+  ///                       of the ObjC method being parsed.
+  ///
+  /// \param[in] attrs DWARF attributes for \ref die.
+  ///
+  /// \param[in] is_variadic Is true iff we're parsing a variadic method.
+  ///
+  /// \returns true on success
+  bool
+  ParseObjCMethod(const lldb_private::ObjCLanguage::MethodName &objc_method,
+                  const lldb_private::plugin::dwarf::DWARFDIE &die,
+                  lldb_private::CompilerType clang_type,
+                  const ParsedDWARFTypeAttributes &attrs, bool is_variadic);
+
+  /// Helper function called by \ref ParseSubroutine when parsing C++ methods.
+  ///
+  /// \param[in] die The DIE that represents the C++ method being parsed.
+  ///
+  /// \param[in] clang_type The CompilerType representing the function prototype
+  ///                       of the C++ method being parsed.
+  ///
+  /// \param[in] attrs DWARF attributes for \ref die.
+  ///
+  /// \param[in] decl_ctx_die The DIE representing the DeclContext of the C++
+  ///                         method being parsed.
+  ///
+  /// \param[in] is_static Is true iff we're parsing a static method.
+  ///
+  /// \param[out] ignore_containing_context Will get set to true if the caller
+  ///             should treat this C++ method as-if it was not a C++ method.
+  ///             Currently used as a hack to work around templated C++ methods
+  ///             causing class definitions to mismatch between CUs.
+  ///
+  /// \returns A pair of <bool, TypeSP>. The first element is 'true' on success.
+  ///          The second element is non-null if we have previously parsed this
+  ///          method (a null TypeSP does not indicate failure).
+  std::pair<bool, lldb::TypeSP>
+  ParseCXXMethod(const lldb_private::plugin::dwarf::DWARFDIE &die,
+                 lldb_private::CompilerType clang_type,
+                 const ParsedDWARFTypeAttributes &attrs,
+                 const lldb_private::plugin::dwarf::DWARFDIE &decl_ctx_die,
+                 bool is_static, bool &ignore_containing_context);
+
   lldb::TypeSP ParseArrayType(const lldb_private::plugin::dwarf::DWARFDIE &die,
                               const ParsedDWARFTypeAttributes &attrs);
   lldb::TypeSP
@@ -405,6 +497,7 @@ struct ParsedDWARFTypeAttributes {
   lldb_private::plugin::dwarf::DWARFFormValue type;
   lldb::LanguageType class_language = lldb::eLanguageTypeUnknown;
   std::optional<uint64_t> byte_size;
+  std::optional<uint64_t> alignment;
   size_t calling_convention = llvm::dwarf::DW_CC_normal;
   uint32_t bit_stride = 0;
   uint32_t byte_stride = 0;

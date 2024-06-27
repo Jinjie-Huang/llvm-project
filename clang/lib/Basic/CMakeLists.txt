@@ -1,6 +1,7 @@
 set(LLVM_LINK_COMPONENTS
   Support
   TargetParser
+  FrontendOpenMP
   )
 
 find_first_existing_vc_file("${LLVM_MAIN_SRC_DIR}" llvm_vc)
@@ -54,6 +55,7 @@ if(CLANG_VENDOR)
 endif()
 
 add_clang_library(clangBasic
+  ASTSourceDescriptor.cpp
   Attributes.cpp
   Builtins.cpp
   CLWarnings.cpp
@@ -85,6 +87,7 @@ add_clang_library(clangBasic
   Sarif.cpp
   SourceLocation.cpp
   SourceManager.cpp
+  SourceMgrAdapter.cpp
   Stack.cpp
   TargetID.cpp
   TargetInfo.cpp
@@ -128,6 +131,9 @@ add_clang_library(clangBasic
   DEPENDS
   omp_gen
   ClangDriverOptions
+  # These generated headers are included transitively.
+  ARMTargetParserTableGen
+  AArch64TargetParserTableGen
   )
 
 target_link_libraries(clangBasic

@@ -131,6 +131,12 @@ static void resolveTopLevelMetadata(llvm::Function *Fn,
   // they are referencing.
   for (auto &BB : *Fn) {
     for (auto &I : BB) {
+      for (llvm::DbgVariableRecord &DVR :
+           llvm::filterDbgVars(I.getDbgRecordRange())) {
+        auto *DILocal = DVR.getVariable();
+        if (!DILocal->isResolved())
+          DILocal->resolve();
+      }
       if (auto *DII = dyn_cast<llvm::DbgVariableIntrinsic>(&I)) {
         auto *DILocal = DII->getVariable();
         if (!DILocal->isResolved())
@@ -201,14 +207,13 @@ CodeGenFunction::GenerateVarArgsThunk(llvm::Function *Fn,
 
   // Find the first store of "this", which will be to the alloca associated
   // with "this".
-  Address ThisPtr =
-      Address(&*AI, ConvertTypeForMem(MD->getFunctionObjectParameterType()),
-              CGM.getClassPointerAlignment(MD->getParent()));
+  Address ThisPtr = makeNaturalAddressForPointer(
+      &*AI, MD->getFunctionObjectParameterType(),
+      CGM.getClassPointerAlignment(MD->getParent()));
   llvm::BasicBlock *EntryBB = &Fn->front();
   llvm::BasicBlock::iterator ThisStore =
       llvm::find_if(*EntryBB, [&](llvm::Instruction &I) {
-        return isa<llvm::StoreInst>(I) &&
-               I.getOperand(0) == ThisPtr.getPointer();
+        return isa<llvm::StoreInst>(I) && I.getOperand(0) == &*AI;
       });
   assert(ThisStore != EntryBB->end() &&
          "Store of this should be in entry block?");
@@ -465,10 +470,6 @@ void CodeGenFunction::generateThunk(llvm::Function *Fn,
 
   llvm::Constant *Callee = CGM.GetAddrOfFunction(GD, Ty, /*ForVTable=*/true);
 
-  // Fix up the function type for an unprototyped musttail call.
-  if (IsUnprototyped)
-    Callee = llvm::ConstantExpr::getBitCast(Callee, Fn->getType());
-
   // Make the call and return the result.
   EmitCallAndReturnForThunk(llvm::FunctionCallee(Fn->getFunctionType(), Callee),
                             &Thunk, IsUnprototyped);
@@ -537,11 +538,8 @@ llvm::Constant *CodeGenVTables::maybeEmitThunk(GlobalDecl GD,
                                      Name.str(), &CGM.getModule());
     CGM.SetLLVMFunctionAttributes(MD, FnInfo, ThunkFn, /*IsThunk=*/false);
 
-    // If needed, replace the old thunk with a bitcast.
     if (!OldThunkFn->use_empty()) {
-      llvm::Constant *NewPtrForOldDecl =
-          llvm::ConstantExpr::getBitCast(ThunkFn, OldThunkFn->getType());
-      OldThunkFn->replaceAllUsesWith(NewPtrForOldDecl);
+      OldThunkFn->replaceAllUsesWith(ThunkFn);
     }
 
     // Remove the old thunk.
@@ -800,7 +798,7 @@ void CodeGenVTables::addVTableComponent(ConstantArrayBuilder &builder,
     llvm::Constant *fnPtr;
 
     // Pure virtual member functions.
-    if (cast<CXXMethodDecl>(GD.getDecl())->isPure()) {
+    if (cast<CXXMethodDecl>(GD.getDecl())->isPureVirtual()) {
       if (!PureVirtualFn)
         PureVirtualFn =
             getSpecialVirtualFn(CGM.getCXXABI().GetPureVirtualCallName());
@@ -1053,6 +1051,11 @@ CodeGenModule::getVTableLinkage(const CXXRecordDecl *RD) {
   if (!RD->isExternallyVisible())
     return llvm::GlobalVariable::InternalLinkage;
 
+  // V-tables for non-template classes with an owning module are always
+  // uniquely emitted in that module.
+  if (RD->isInNamedModule())
+    return llvm::GlobalVariable::ExternalLinkage;
+
   // We're at the end of the translation unit, so the current key
   // function is fully correct.
   const CXXMethodDecl *keyFunction = Context.getCurrentKeyFunction(RD);
@@ -1187,6 +1190,21 @@ bool CodeGenVTables::isVTableExternal(const CXXRecordDecl *RD) {
       TSK == TSK_ExplicitInstantiationDefinition)
     return false;
 
+  // Itanium C++ ABI [5.2.3]:
+  // Virtual tables for dynamic classes are emitted as follows:
+  //
+  // - If the class is templated, the tables are emitted in every object that
+  // references any of them.
+  // - Otherwise, if the class is attached to a module, the tables are uniquely
+  // emitted in the object for the module unit in which it is defined.
+  // - Otherwise, if the class has a key function (see below), the tables are
+  // emitted in the object for the translation unit containing the definition of
+  // the key function. This is unique if the key function is not inline.
+  // - Otherwise, the tables are emitted in every object that references any of
+  // them.
+  if (RD->isInNamedModule())
+    return RD->shouldEmitInExternalSource();
+
   // Otherwise, if the class doesn't have a key function (possibly
   // anymore), the vtable must be defined here.
   const CXXMethodDecl *keyFunction = CGM.getContext().getCurrentKeyFunction(RD);
@@ -1196,13 +1214,7 @@ bool CodeGenVTables::isVTableExternal(const CXXRecordDecl *RD) {
   const FunctionDecl *Def;
   // Otherwise, if we don't have a definition of the key function, the
   // vtable must be defined somewhere else.
-  if (!keyFunction->hasBody(Def))
-    return true;
-
-  assert(Def && "The body of the key function is not assigned to Def?");
-  // If the non-inline key function comes from another module unit, the vtable
-  // must be defined there.
-  return Def->isInAnotherModuleUnit() && !Def->isInlineSpecified();
+  return !keyFunction->hasBody(Def);
 }
 
 /// Given that we're currently at the end of the translation unit, and

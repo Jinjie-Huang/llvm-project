@@ -193,7 +193,7 @@ static void patchI64(raw_pwrite_stream &Stream, uint64_t Value,
 }
 
 bool isDwoSection(const MCSection &Sec) {
-  return Sec.getName().endswith(".dwo");
+  return Sec.getName().ends_with(".dwo");
 }
 
 class WasmObjectWriter : public MCObjectWriter {
@@ -529,7 +529,7 @@ void WasmObjectWriter::recordRelocation(MCAssembler &Asm,
   const auto *SymA = cast<MCSymbolWasm>(&RefA->getSymbol());
 
   // The .init_array isn't translated as data, so don't do relocations in it.
-  if (FixupSection.getName().startswith(".init_array")) {
+  if (FixupSection.getName().starts_with(".init_array")) {
     SymA->setUsedInInitArray();
     return;
   }
@@ -877,7 +877,7 @@ void WasmObjectWriter::writeImportSection(ArrayRef<wasm::WasmImport> Imports,
       break;
     case wasm::WASM_EXTERNAL_TABLE:
       W->OS << char(Import.Table.ElemType);
-      encodeULEB128(0, W->OS);           // flags
+      encodeULEB128(Import.Table.Limits.Flags, W->OS);
       encodeULEB128(NumElements, W->OS); // initial
       break;
     case wasm::WASM_EXTERNAL_TAG:
@@ -972,7 +972,9 @@ void WasmObjectWriter::writeTableSection(ArrayRef<wasm::WasmTable> Tables) {
 
   encodeULEB128(Tables.size(), W->OS);
   for (const wasm::WasmTable &Table : Tables) {
-    encodeULEB128(Table.Type.ElemType, W->OS);
+    assert(Table.Type.ElemType != wasm::ValType::OTHERREF &&
+           "Cannot encode general ref-typed tables");
+    encodeULEB128((uint32_t)Table.Type.ElemType, W->OS);
     encodeULEB128(Table.Type.Limits.Flags, W->OS);
     encodeULEB128(Table.Type.Limits.Minimum, W->OS);
     if (Table.Type.Limits.Flags & wasm::WASM_LIMITS_FLAG_HAS_MAX)
@@ -1020,7 +1022,8 @@ void WasmObjectWriter::writeElemSection(
     encodeULEB128(TableNumber, W->OS); // the table number
 
   // init expr for starting offset
-  W->OS << char(wasm::WASM_OPCODE_I32_CONST);
+  W->OS << char(is64Bit() ? wasm::WASM_OPCODE_I64_CONST
+                          : wasm::WASM_OPCODE_I32_CONST);
   encodeSLEB128(InitialTableOffset, W->OS);
   W->OS << char(wasm::WASM_OPCODE_END);
 
@@ -1491,7 +1494,7 @@ uint64_t WasmObjectWriter::writeOneObject(MCAssembler &Asm,
                       << Section.getGroup() << "\n";);
 
     // .init_array sections are handled specially elsewhere.
-    if (SectionName.startswith(".init_array"))
+    if (SectionName.starts_with(".init_array"))
       continue;
 
     // Code is handled separately
@@ -1526,8 +1529,7 @@ uint64_t WasmObjectWriter::writeOneObject(MCAssembler &Asm,
       StringRef Name = SectionName;
 
       // For user-defined custom sections, strip the prefix
-      if (Name.startswith(".custom_section."))
-        Name = Name.substr(strlen(".custom_section."));
+      Name.consume_front(".custom_section.");
 
       MCSymbol *Begin = Sec.getBeginSymbol();
       if (Begin) {
@@ -1851,31 +1853,25 @@ uint64_t WasmObjectWriter::writeOneObject(MCAssembler &Asm,
   // Translate .init_array section contents into start functions.
   for (const MCSection &S : Asm) {
     const auto &WS = static_cast<const MCSectionWasm &>(S);
-    if (WS.getName().startswith(".fini_array"))
+    if (WS.getName().starts_with(".fini_array"))
       report_fatal_error(".fini_array sections are unsupported");
-    if (!WS.getName().startswith(".init_array"))
+    if (!WS.getName().starts_with(".init_array"))
       continue;
-    if (WS.getFragmentList().empty())
-      continue;
-
-    // init_array is expected to contain a single non-empty data fragment
-    if (WS.getFragmentList().size() != 3)
-      report_fatal_error("only one .init_array section fragment supported");
-
     auto IT = WS.begin();
+    if (IT == WS.end())
+      continue;
     const MCFragment &EmptyFrag = *IT;
     if (EmptyFrag.getKind() != MCFragment::FT_Data)
       report_fatal_error(".init_array section should be aligned");
 
-    IT = std::next(IT);
-    const MCFragment &AlignFrag = *IT;
+    const MCFragment &AlignFrag = *EmptyFrag.getNext();
     if (AlignFrag.getKind() != MCFragment::FT_Align)
       report_fatal_error(".init_array section should be aligned");
     if (cast<MCAlignFragment>(AlignFrag).getAlignment() !=
         Align(is64Bit() ? 8 : 4))
       report_fatal_error(".init_array section should be aligned for pointers");
 
-    const MCFragment &Frag = *std::next(IT);
+    const MCFragment &Frag = *AlignFrag.getNext();
     if (Frag.hasInstructions() || Frag.getKind() != MCFragment::FT_Data)
       report_fatal_error("only data supported in .init_array section");
 
