@@ -881,6 +881,31 @@ diagnoseFrameworkInclude(DiagnosticsEngine &Diags, SourceLocation IncludeLoc,
         << IncludeFilename;
 }
 
+
+/// Return true if a shadow has been detected and the caller should
+/// stop and return the first-found file, false otherwise.
+static bool checkAndStoreCandidate(
+    OptionalFileEntryRef CandidateFile, StringRef CandidateDir,
+    DiagnosticsEngine &Diags, StringRef Filename, SourceLocation IncludeLoc,
+    OptionalFileEntryRef &FirstHeader, SmallString<1024> &FirstDir) {
+  if (!FirstHeader) {
+    // Found the first candidate
+    FirstHeader = CandidateFile;
+    FirstDir = CandidateDir;
+    return false;
+  }
+
+  if (FirstDir != CandidateDir) {
+    // Found a second candidate from a different directory
+    Diags.Report(IncludeLoc, diag::warn_header_shadowed)
+        << Filename << FirstDir << CandidateDir;
+    return true;
+  }
+
+  // Found a candidate from the same directory as the first one
+  return false;
+}
+
 /// LookupFile - Given a "foo" or \<foo> reference, look up the indicated file,
 /// return null on failure.  isAngled indicates whether the file reference is
 /// for system \#include's or not (i.e. using <> instead of ""). Includers, if
@@ -896,7 +921,7 @@ OptionalFileEntryRef HeaderSearch::LookupFile(
     bool BuildSystemModule, bool OpenFile, bool CacheFailures) {
   ConstSearchDirIterator CurDirLocal = nullptr;
   ConstSearchDirIterator &CurDir = CurDirArg ? *CurDirArg : CurDirLocal;
-
+  llvm::errs() << "Include Filename 1: " << Filename << " \n";
   if (IsMapped)
     *IsMapped = false;
 
@@ -926,10 +951,13 @@ OptionalFileEntryRef HeaderSearch::LookupFile(
                                    RequestingModule, SuggestedModule, OpenFile,
                                    CacheFailures);
   }
+  llvm::errs() << "Include Filename 2: " << Filename << " \n";
 
   // This is the header that MSVC's header search would have found.
   ModuleMap::KnownHeader MSSuggestedModule;
   OptionalFileEntryRef MSFE;
+  OptionalFileEntryRef FirstHeader;
+  SmallString<1024> FirstDir;
 
   // Check to see if the file is in the #includer's directory. This cannot be
   // based on CurDir, because each includer could be a #include of a
@@ -944,6 +972,8 @@ OptionalFileEntryRef HeaderSearch::LookupFile(
 
       // Concatenate the requested file onto the directory.
       TmpDir = IncluderAndDir.second.getName();
+      llvm::errs() << "IncluderAndDir.second.getName() 3: "
+                   << IncluderAndDir.second.getName() << " \n";
       llvm::sys::path::append(TmpDir, Filename);
 
       // FIXME: We don't cache the result of getFileInfo across the call to
@@ -965,7 +995,10 @@ OptionalFileEntryRef HeaderSearch::LookupFile(
               RequestingModule, SuggestedModule)) {
         if (!Includer) {
           assert(First && "only first includer can have no file");
-          return FE;
+          llvm::errs() << "Include Filename 3.1: " << Filename << " \n";
+          checkAndStoreCandidate(FE, IncluderAndDir.second.getName(), Diags,
+                                 Filename, IncludeLoc, FirstHeader, FirstDir);
+          break;
         }
 
         // Leave CurDir unset.
@@ -994,26 +1027,33 @@ OptionalFileEntryRef HeaderSearch::LookupFile(
           diagnoseFrameworkInclude(Diags, IncludeLoc,
                                    IncluderAndDir.second.getName(), Filename,
                                    *FE);
-          return FE;
+          llvm::errs() << "Include Filename 3.2: " << Filename << " \n";
+          checkAndStoreCandidate(FE, IncluderAndDir.second.getName(), Diags,
+                                 Filename, IncludeLoc, FirstHeader, FirstDir);
+          break;
         }
 
         // Otherwise, we found the path via MSVC header search rules.  If
         // -Wmsvc-include is enabled, we have to keep searching to see if we
         // would've found this header in -I or -isystem directories.
-        if (Diags.isIgnored(diag::ext_pp_include_search_ms, IncludeLoc)) {
-          return FE;
-        } else {
-          MSFE = FE;
-          if (SuggestedModule) {
-            MSSuggestedModule = *SuggestedModule;
-            *SuggestedModule = ModuleMap::KnownHeader();
-          }
-          break;
+        if (checkAndStoreCandidate(FE, IncluderAndDir.second.getName(), Diags,
+                                   Filename, IncludeLoc, FirstHeader,
+                                   FirstDir)) {
+          if (Diags.isIgnored(diag::ext_pp_include_search_ms, IncludeLoc))
+            return FirstHeader;
+          else
+            break;
+        }
+        MSFE = FE;
+        if (SuggestedModule) {
+          MSSuggestedModule = *SuggestedModule;
+          *SuggestedModule = ModuleMap::KnownHeader();
         }
       }
       First = false;
     }
   }
+  llvm::errs() << "Include Filename 3: " << Filename << " \n";
 
   CurDir = nullptr;
 
@@ -1097,6 +1137,11 @@ OptionalFileEntryRef HeaderSearch::LookupFile(
     if (!File)
       continue;
 
+    llvm::errs() << "Include Filename 4: " << Filename << " \n";
+    if (checkAndStoreCandidate(File, It->getName(), Diags, Filename, IncludeLoc,
+                               FirstHeader, FirstDir))
+      return FirstHeader;
+
     CurDir = It;
 
     IncludeNames[*File] = Filename;
@@ -1115,17 +1160,15 @@ OptionalFileEntryRef HeaderSearch::LookupFile(
     // whether the file is a system header.
     for (unsigned j = SystemHeaderPrefixes.size(); j; --j) {
       if (Filename.starts_with(SystemHeaderPrefixes[j - 1].first)) {
-        HFI.DirInfo = SystemHeaderPrefixes[j-1].second ? SrcMgr::C_System
-                                                       : SrcMgr::C_User;
+        HFI.DirInfo = SystemHeaderPrefixes[j - 1].second ? SrcMgr::C_System
+                                                         : SrcMgr::C_User;
         break;
       }
     }
 
-    if (checkMSVCHeaderSearch(Diags, MSFE, &File->getFileEntry(), IncludeLoc)) {
-      if (SuggestedModule)
-        *SuggestedModule = MSSuggestedModule;
-      return MSFE;
-    }
+    if (checkMSVCHeaderSearch(Diags, MSFE, &File->getFileEntry(), IncludeLoc) &&
+        SuggestedModule)
+      *SuggestedModule = MSSuggestedModule;
 
     bool FoundByHeaderMap = !IsMapped ? false : *IsMapped;
     if (!Includers.empty())
@@ -1135,8 +1178,10 @@ OptionalFileEntryRef HeaderSearch::LookupFile(
 
     // Remember this location for the next lookup we do.
     cacheLookupSuccess(CacheLookup, It, IncludeLoc);
-    return File;
   }
+
+  if (FirstHeader)
+    return FirstHeader;
 
   if (checkMSVCHeaderSearch(Diags, MSFE, nullptr, IncludeLoc)) {
     if (SuggestedModule)
