@@ -894,7 +894,8 @@ static bool checkAndStoreCandidate(
     // Found the first candidate
     FirstHeader = CandidateFile;
     FirstDir = CandidateDir;
-    FirstModule = *SuggestedModule;
+    if (SuggestedModule)
+      FirstModule = *SuggestedModule;
     return false;
   }
 
@@ -902,7 +903,8 @@ static bool checkAndStoreCandidate(
     // Found a second candidate from a different directory
     Diags.Report(IncludeLoc, diag::warn_header_shadowed)
         << Filename << FirstDir << CandidateDir;
-    *SuggestedModule = FirstModule;
+    if (SuggestedModule)
+      *SuggestedModule = FirstModule;
     return true;
   }
 
