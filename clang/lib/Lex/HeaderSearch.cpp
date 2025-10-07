@@ -972,7 +972,7 @@ OptionalFileEntryRef HeaderSearch::LookupFile(
 
       // Concatenate the requested file onto the directory.
       TmpDir = IncluderAndDir.second.getName();
-      llvm::errs() << "IncluderAndDir.second.getName() 3: "
+      llvm::errs() << "IncluderAndDir.second.getName() 3.0: "
                    << IncluderAndDir.second.getName() << " \n";
       llvm::sys::path::append(TmpDir, Filename);
 
@@ -1039,11 +1039,14 @@ OptionalFileEntryRef HeaderSearch::LookupFile(
         if (checkAndStoreCandidate(FE, IncluderAndDir.second.getName(), Diags,
                                    Filename, IncludeLoc, FirstHeader,
                                    FirstDir)) {
+          // Found mutiple candidates via MSVC rules
           if (Diags.isIgnored(diag::ext_pp_include_search_ms, IncludeLoc))
             return FirstHeader;
           else
             break;
         }
+        llvm::errs() << "Include Filename 3.3: " << Filename << ", IncluderAndDir.second.getName(): "
+                   << IncluderAndDir.second.getName() << " \n";
         MSFE = FE;
         if (SuggestedModule) {
           MSSuggestedModule = *SuggestedModule;
@@ -1180,14 +1183,14 @@ OptionalFileEntryRef HeaderSearch::LookupFile(
     cacheLookupSuccess(CacheLookup, It, IncludeLoc);
   }
 
-  if (FirstHeader)
-    return FirstHeader;
-
   if (checkMSVCHeaderSearch(Diags, MSFE, nullptr, IncludeLoc)) {
     if (SuggestedModule)
       *SuggestedModule = MSSuggestedModule;
     return MSFE;
   }
+
+  if (FirstHeader)
+    return FirstHeader;
 
   // Otherwise, didn't find it. Remember we didn't find this.
   CacheLookup.HitIt = search_dir_end();
