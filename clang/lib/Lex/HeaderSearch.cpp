@@ -883,15 +883,18 @@ diagnoseFrameworkInclude(DiagnosticsEngine &Diags, SourceLocation IncludeLoc,
 
 
 /// Return true if a shadow has been detected and the caller should
-/// stop and return the first-found file, false otherwise.
+/// stop and return the first-found file and module, false otherwise.
 static bool checkAndStoreCandidate(
+    ModuleMap::KnownHeader *SuggestedModule,
     OptionalFileEntryRef CandidateFile, StringRef CandidateDir,
     DiagnosticsEngine &Diags, StringRef Filename, SourceLocation IncludeLoc,
-    OptionalFileEntryRef &FirstHeader, SmallString<1024> &FirstDir) {
+    ModuleMap::KnownHeader &FirstModule, OptionalFileEntryRef &FirstHeader,
+    SmallString<1024> &FirstDir) {
   if (!FirstHeader) {
     // Found the first candidate
     FirstHeader = CandidateFile;
     FirstDir = CandidateDir;
+    FirstModule = *SuggestedModule;
     return false;
   }
 
@@ -899,6 +902,7 @@ static bool checkAndStoreCandidate(
     // Found a second candidate from a different directory
     Diags.Report(IncludeLoc, diag::warn_header_shadowed)
         << Filename << FirstDir << CandidateDir;
+    *SuggestedModule = FirstModule;
     return true;
   }
 
@@ -956,6 +960,7 @@ OptionalFileEntryRef HeaderSearch::LookupFile(
   // This is the header that MSVC's header search would have found.
   ModuleMap::KnownHeader MSSuggestedModule;
   OptionalFileEntryRef MSFE;
+  ModuleMap::KnownHeader FirstModule;
   OptionalFileEntryRef FirstHeader;
   SmallString<1024> FirstDir;
 
@@ -996,8 +1001,10 @@ OptionalFileEntryRef HeaderSearch::LookupFile(
         if (!Includer) {
           assert(First && "only first includer can have no file");
           llvm::errs() << "Include Filename 3.1: " << Filename << " \n";
-          checkAndStoreCandidate(FE, IncluderAndDir.second.getName(), Diags,
-                                 Filename, IncludeLoc, FirstHeader, FirstDir);
+          checkAndStoreCandidate(SuggestedModule, FE, 
+                                 IncluderAndDir.second.getName(), Diags,
+                                 Filename, IncludeLoc, FirstModule,
+                                 FirstHeader, FirstDir);
           break;
         }
 
@@ -1028,17 +1035,18 @@ OptionalFileEntryRef HeaderSearch::LookupFile(
                                    IncluderAndDir.second.getName(), Filename,
                                    *FE);
           llvm::errs() << "Include Filename 3.2: " << Filename << " \n";
-          checkAndStoreCandidate(FE, IncluderAndDir.second.getName(), Diags,
-                                 Filename, IncludeLoc, FirstHeader, FirstDir);
+          checkAndStoreCandidate(SuggestedModule, FE, 
+              IncluderAndDir.second.getName(), Diags, Filename, IncludeLoc,
+              FirstModule, FirstHeader, FirstDir);
           break;
         }
 
         // Otherwise, we found the path via MSVC header search rules.  If
         // -Wmsvc-include is enabled, we have to keep searching to see if we
         // would've found this header in -I or -isystem directories.
-        if (checkAndStoreCandidate(FE, IncluderAndDir.second.getName(), Diags,
-                                   Filename, IncludeLoc, FirstHeader,
-                                   FirstDir)) {
+        if (checkAndStoreCandidate(SuggestedModule, FE, 
+            IncluderAndDir.second.getName(), Diags, Filename, IncludeLoc,
+            FirstModule, FirstHeader, FirstDir)) {
           // Found mutiple candidates via MSVC rules
           if (Diags.isIgnored(diag::ext_pp_include_search_ms, IncludeLoc))
             return FirstHeader;
@@ -1127,6 +1135,8 @@ OptionalFileEntryRef HeaderSearch::LookupFile(
       CacheLookup.MappedName =
           copyString(MappedName, LookupFileCache.getAllocator());
     }
+    llvm::errs() << "It->getName() 4.0: "
+              << It->getName() << " \n";
     if (IsMapped)
       // A filename is mapped when a header map remapped it to a relative path
       // used in subsequent header search or to an absolute path pointing to an
@@ -1140,9 +1150,9 @@ OptionalFileEntryRef HeaderSearch::LookupFile(
     if (!File)
       continue;
 
-    llvm::errs() << "Include Filename 4: " << Filename << " \n";
-    if (checkAndStoreCandidate(File, It->getName(), Diags, Filename, IncludeLoc,
-                               FirstHeader, FirstDir))
+    llvm::errs() << "Found Include Filename 4: " << Filename << " \n";
+    if (checkAndStoreCandidate(SuggestedModule, File, It->getName(), Diags,
+        Filename, IncludeLoc, FirstModule, FirstHeader, FirstDir))
       return FirstHeader;
 
     CurDir = It;

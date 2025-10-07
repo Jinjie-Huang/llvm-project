@@ -58,7 +58,7 @@
 // the overlay dir is prefixed to access headers in .cache/vfs directory.
 
 // RUN: env -u FORCE_CLANG_DIAGNOSTICS_CRASH \
-// RUN: %clang -E %s -I %S/Inputs/crash-recovery/usr/include -isysroot %/t/i/ \
+// RUN: %clang -Wno-header-shadowing -E %s -I %S/Inputs/crash-recovery/usr/include -isysroot %/t/i/ \
 // RUN:     -ivfsoverlay %t/crash-vfs-*.cache/vfs/vfs.yaml -fmodules \
 // RUN:     -fmodules-cache-path=%t/m/ 2>&1 \
 // RUN:     | FileCheck %s --check-prefix=CHECKOVERLAY
