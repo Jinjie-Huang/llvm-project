@@ -4,6 +4,6 @@
 // RUN: cp %S/Inputs/Nonmodular/Nonmodular.modulemap %t/outdir/module.modulemap
 //
 // RUN: sed -e "s@VDIR@%{/t:regex_replacement}/vdir@g" -e "s@IN_DIR@%{/S:regex_replacement}@g" -e "s@OUT_DIR@%{/t:regex_replacement}/outdir@g" %S/Inputs/Nonmodular/nonmodular-headers.yaml > %t/vdir/nonmodular-headers.yaml
-// RUN: %clang_cc1 -fmodule-name=Nonmodular -fmodules -Wnon-modular-include-in-framework-module -verify -fimplicit-module-maps -fmodules-cache-path=%t/cache -ivfsoverlay %t/vdir/nonmodular-headers.yaml -I %S/Inputs -F %t/vdir -fsyntax-only %S/Inputs/Nonmodular/test.c
+// RUN: %clang_cc1 -Wno-header-shadowing -fmodule-name=Nonmodular -fmodules -Wnon-modular-include-in-framework-module -verify -fimplicit-module-maps -fmodules-cache-path=%t/cache -ivfsoverlay %t/vdir/nonmodular-headers.yaml -I %S/Inputs -F %t/vdir -fsyntax-only %S/Inputs/Nonmodular/test.c
 
 // expected-no-diagnostics

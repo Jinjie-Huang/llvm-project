@@ -1,7 +1,7 @@
 // RUN: rm -rf %t
-// RUN: %clang_cc1 -cxx-isystem %S/Inputs/builtin-headers/c++ -internal-isystem %S/Inputs/builtin-headers -fsyntax-only -fmodules -fmodules-cache-path=%t -fmodule-map-file=%S/Inputs/builtin-headers/c++/module.modulemap -fmodule-map-file=%resource_dir/module.modulemap -fmodule-map-file=%S/Inputs/builtin-headers/system-modules.modulemap -fbuiltin-headers-in-system-modules -DSYSTEM_MODULES %s -verify
+// RUN: %clang_cc1 -Wno-header-shadowing -cxx-isystem %S/Inputs/builtin-headers/c++ -internal-isystem %S/Inputs/builtin-headers -fsyntax-only -fmodules -fmodules-cache-path=%t -fmodule-map-file=%S/Inputs/builtin-headers/c++/module.modulemap -fmodule-map-file=%resource_dir/module.modulemap -fmodule-map-file=%S/Inputs/builtin-headers/system-modules.modulemap -fbuiltin-headers-in-system-modules -DSYSTEM_MODULES %s -verify
 // RUN: rm -rf %t
-// RUN: %clang_cc1 -cxx-isystem %S/Inputs/builtin-headers/c++ -internal-isystem %S/Inputs/builtin-headers -fsyntax-only -fmodules -fmodules-cache-path=%t -fmodule-map-file=%S/Inputs/builtin-headers/c++/module.modulemap -fmodule-map-file=%resource_dir/module.modulemap -fmodule-map-file=%S/Inputs/builtin-headers/builtin-modules.modulemap %s -verify
+// RUN: %clang_cc1 -Wno-header-shadowing -cxx-isystem %S/Inputs/builtin-headers/c++ -internal-isystem %S/Inputs/builtin-headers -fsyntax-only -fmodules -fmodules-cache-path=%t -fmodule-map-file=%S/Inputs/builtin-headers/c++/module.modulemap -fmodule-map-file=%resource_dir/module.modulemap -fmodule-map-file=%S/Inputs/builtin-headers/builtin-modules.modulemap %s -verify
 
 // expected-no-diagnostics
 

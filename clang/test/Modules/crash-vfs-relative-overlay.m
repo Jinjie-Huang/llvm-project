@@ -12,7 +12,7 @@
 // RUN: mkdir -p %t/i %t/m %t
 
 // RUN: env FORCE_CLANG_DIAGNOSTICS_CRASH= TMPDIR=%t TEMP=%t TMP=%t \
-// RUN: not %clang -fsyntax-only -nostdinc %s \
+// RUN: not %clang -Wno-header-shadowing -fsyntax-only -nostdinc %s \
 // RUN:     -I %S/Inputs/crash-recovery/usr/include -isysroot %/t/i/ \
 // RUN:     -fmodules -fmodules-cache-path=%t/m/ 2>&1 | FileCheck %s
 

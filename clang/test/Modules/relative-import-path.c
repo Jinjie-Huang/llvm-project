@@ -4,7 +4,7 @@
 
 // Use FileCheck, which is more flexible.
 //
-// RUN: %clang_cc1 -fmodules -fimplicit-module-maps -fmodules-cache-path=%t/cache \
+// RUN: %clang_cc1 -Wno-header-shadowing -fmodules -fimplicit-module-maps -fmodules-cache-path=%t/cache \
 // RUN:     -fdisable-module-hash -fsyntax-only \
 // RUN:     -I%S/Inputs/relative-import-path \
 // RUN:     -working-directory=%t \

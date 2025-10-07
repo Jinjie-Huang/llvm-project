@@ -1,6 +1,6 @@
-// RUN: %clang_cc1 -verify %s -E -o /dev/null -I%S/Inputs/include-next-1 -I%S/Inputs/include-next-2 -DTEST=1
-// RUN: %clang_cc1 -verify %s -E -o /dev/null -I%S/Inputs/include-next-1 -I%S/Inputs/include-next-2 -DTEST=2
-// RUN: %clang_cc1 -verify %s -E -o /dev/null -I%S/Inputs/include-next-1 -I%S/Inputs/include-next-2 -DTEST=3
+// RUN: %clang_cc1 -Wno-header-shadowing -verify %s -E -o /dev/null -I%S/Inputs/include-next-1 -I%S/Inputs/include-next-2 -DTEST=1
+// RUN: %clang_cc1 -Wno-header-shadowing -verify %s -E -o /dev/null -I%S/Inputs/include-next-1 -I%S/Inputs/include-next-2 -DTEST=2
+// RUN: %clang_cc1 -Wno-header-shadowing -verify %s -E -o /dev/null -I%S/Inputs/include-next-1 -I%S/Inputs/include-next-2 -DTEST=3
 
 #if TEST == 1
 // expected-warning@+1 {{#include_next in primary source file}}

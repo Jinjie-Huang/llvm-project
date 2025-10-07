@@ -12,21 +12,21 @@
 // RUN: rm -rf %t
 // RUN: split-file %s %t
 
-// RUN: %clang_cc1 -emit-module -x c -fmodules -fno-implicit-modules -isysroot %t/Sysroot \
+// RUN: %clang_cc1 -Wno-header-shadowing -emit-module -x c -fmodules -fno-implicit-modules -isysroot %t/Sysroot \
 // RUN:     -I%t/Sysroot/usr/include \
 // RUN:     -fmodule-name=A %t/Sysroot/usr/include/A/module.modulemap -o %t/A-1.pcm
 
-// RUN: %clang_cc1 -emit-module -x c -fmodules -fno-implicit-modules -isysroot %t/Sysroot \
+// RUN: %clang_cc1 -Wno-header-shadowing -emit-module -x c -fmodules -fno-implicit-modules -isysroot %t/Sysroot \
 // RUN:     -I%t/BuildDir \
 // RUN:     -fmodule-name=A %t/BuildDir/A/module.modulemap -o %t/A-2.pcm
 
-// RUN: %clang_cc1 -emit-module -x c -fmodules -fno-implicit-modules -isysroot %t/Sysroot \
+// RUN: %clang_cc1 -Wno-header-shadowing -emit-module -x c -fmodules -fno-implicit-modules -isysroot %t/Sysroot \
 // RUN:     -I%t/Sysroot/usr/include \
 // RUN:     -fmodule-map-file=%t/Sysroot/usr/include/A/module.modulemap \
 // RUN:     -fmodule-file=A=%t/A-1.pcm \
 // RUN:     -fmodule-name=B %t/Sysroot/usr/include/B/module.modulemap -o %t/B-1.pcm
 
-// RUN: %clang_cc1 -x c -fmodules -fno-implicit-modules -isysroot %t/Sysroot \
+// RUN: %clang_cc1 -Wno-header-shadowing -x c -fmodules -fno-implicit-modules -isysroot %t/Sysroot \
 // RUN:     -I%t/BuildDir -I%t/Sysroot/usr/include \
 // RUN:     -fmodule-map-file=%t/BuildDir/A/module.modulemap \
 // RUN:     -fmodule-map-file=%t/Sysroot/usr/include/B/module.modulemap \

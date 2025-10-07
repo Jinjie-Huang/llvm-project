@@ -2,7 +2,7 @@
 
 // Check that search paths used by `#include` and `#include_next` are reported.
 //
-// RUN: %clang_cc1 -Eonly %s -Rsearch-path-usage   \
+// RUN: %clang_cc1 -Wno-header-shadowing -Eonly %s -Rsearch-path-usage   \
 // RUN:   -I%S/Inputs/search-path-usage/a          \
 // RUN:   -I%S/Inputs/search-path-usage/a_next     \
 // RUN:   -I%S/Inputs/search-path-usage/b          \

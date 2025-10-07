@@ -49,5 +49,5 @@ framework module FW_Private { umbrella header "Private.h" }
 
 // RUN: sed -e "s|DIR|%/t|g" %t/vfs.json.in > %t/vfs.json
 
-// RUN: %clang_cc1 -fmodules -fimplicit-module-maps -fmodules-cache-path=%t/cache \
+// RUN: %clang_cc1 -Wno-header-shadowing -fmodules -fimplicit-module-maps -fmodules-cache-path=%t/cache \
 // RUN:            -ivfsoverlay %t/vfs.json -I %t/sources -F %t/frameworks -fsyntax-only %t/tu.m -verify
