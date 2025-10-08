@@ -960,6 +960,7 @@ OptionalFileEntryRef HeaderSearch::LookupFile(
   llvm::errs() << "Include Filename 2: " << Filename << " \n";
 
   // This is the header that MSVC's header search would have found.
+  bool First = true;
   ModuleMap::KnownHeader MSSuggestedModule;
   OptionalFileEntryRef MSFE;
   ModuleMap::KnownHeader FirstModule;
@@ -973,7 +974,6 @@ OptionalFileEntryRef HeaderSearch::LookupFile(
   // headers.
   if (!Includers.empty() && !isAngled) {
     SmallString<1024> TmpDir;
-    bool First = true;
     for (const auto &IncluderAndDir : Includers) {
       OptionalFileEntryRef Includer = IncluderAndDir.first;
 
@@ -1122,6 +1122,7 @@ OptionalFileEntryRef HeaderSearch::LookupFile(
   }
 
   SmallString<64> MappedName;
+  First = true;
 
   // Check each directory in sequence to see if it contains this file.
   for (; It != search_dir_end(); ++It) {
@@ -1153,49 +1154,52 @@ OptionalFileEntryRef HeaderSearch::LookupFile(
       continue;
 
     llvm::errs() << "Found Include Filename 4: " << Filename << " \n";
+
+    if (First) {
+      First = false;
+      CurDir = It;
+      IncludeNames[*File] = Filename;
+
+      // This file is a system header or C++ unfriendly if the dir is.
+      HeaderFileInfo &HFI = getFileInfo(*File);
+      HFI.DirInfo = CurDir->getDirCharacteristic();
+
+      // If the directory characteristic is User but this framework was
+      // user-specified to be treated as a system framework, promote the
+      // characteristic.
+      if (HFI.DirInfo == SrcMgr::C_User && InUserSpecifiedSystemFramework)
+        HFI.DirInfo = SrcMgr::C_System;
+
+      // If the filename matches a known system header prefix, override
+      // whether the file is a system header.
+      for (unsigned j = SystemHeaderPrefixes.size(); j; --j) {
+        if (Filename.starts_with(SystemHeaderPrefixes[j - 1].first)) {
+          HFI.DirInfo = SystemHeaderPrefixes[j - 1].second ? SrcMgr::C_System
+                                                          : SrcMgr::C_User;
+          break;
+        }
+      }
+      llvm::errs() << "4.1 MSFE == &File->getFileEntry()? " << (MSFE == &File->getFileEntry()) << " \n";
+      if (checkMSVCHeaderSearch(Diags, MSFE, &File->getFileEntry(), IncludeLoc) &&
+          SuggestedModule)
+        *SuggestedModule = MSSuggestedModule;
+
+      bool FoundByHeaderMap = !IsMapped ? false : *IsMapped;
+      if (!Includers.empty())
+        diagnoseFrameworkInclude(Diags, IncludeLoc,
+                                Includers.front().second.getName(), Filename,
+                                *File, isAngled, FoundByHeaderMap);
+
+      // Remember this location for the next lookup we do.
+      cacheLookupSuccess(CacheLookup, It, IncludeLoc); 
+    }
+
     if (checkAndStoreCandidate(SuggestedModule, File, It->getName(), Diags,
         Filename, IncludeLoc, FirstModule, FirstHeader, FirstDir))
       return FirstHeader;
-
-    CurDir = It;
-
-    IncludeNames[*File] = Filename;
-
-    // This file is a system header or C++ unfriendly if the dir is.
-    HeaderFileInfo &HFI = getFileInfo(*File);
-    HFI.DirInfo = CurDir->getDirCharacteristic();
-
-    // If the directory characteristic is User but this framework was
-    // user-specified to be treated as a system framework, promote the
-    // characteristic.
-    if (HFI.DirInfo == SrcMgr::C_User && InUserSpecifiedSystemFramework)
-      HFI.DirInfo = SrcMgr::C_System;
-
-    // If the filename matches a known system header prefix, override
-    // whether the file is a system header.
-    for (unsigned j = SystemHeaderPrefixes.size(); j; --j) {
-      if (Filename.starts_with(SystemHeaderPrefixes[j - 1].first)) {
-        HFI.DirInfo = SystemHeaderPrefixes[j - 1].second ? SrcMgr::C_System
-                                                         : SrcMgr::C_User;
-        break;
-      }
-    }
-
-    if (checkMSVCHeaderSearch(Diags, MSFE, &File->getFileEntry(), IncludeLoc) &&
-        SuggestedModule)
-      *SuggestedModule = MSSuggestedModule;
-
-    bool FoundByHeaderMap = !IsMapped ? false : *IsMapped;
-    if (!Includers.empty())
-      diagnoseFrameworkInclude(Diags, IncludeLoc,
-                               Includers.front().second.getName(), Filename,
-                               *File, isAngled, FoundByHeaderMap);
-
-    // Remember this location for the next lookup we do.
-    cacheLookupSuccess(CacheLookup, It, IncludeLoc);
   }
 
-  if (checkMSVCHeaderSearch(Diags, MSFE, nullptr, IncludeLoc)) {
+  if (First && checkMSVCHeaderSearch(Diags, MSFE, nullptr, IncludeLoc)) {
     if (SuggestedModule)
       *SuggestedModule = MSSuggestedModule;
     return MSFE;
