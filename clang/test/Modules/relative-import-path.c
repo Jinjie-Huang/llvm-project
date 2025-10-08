@@ -6,6 +6,7 @@
 //
 // RUN: %clang_cc1 -fmodules -fimplicit-module-maps -fmodules-cache-path=%t/cache \
 // RUN:     -fdisable-module-hash -fsyntax-only \
+// RUN:     -I%S/Inputs/relative-import-path \
 // RUN:     -working-directory=%t \
 // RUN:     -Rmodule-build -Rmodule-import t.c 2>&1 |\
 // RUN: FileCheck %s -implicit-check-not "remark:" -DWORKDIR=%t
