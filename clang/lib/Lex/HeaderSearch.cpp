@@ -463,7 +463,7 @@ OptionalFileEntryRef HeaderSearch::getFileAndSuggestModule(
   }
 
   if (!NeedSuggest)
-    return *File; 
+    return *File;
 
   // If there is a module that corresponds to this header, suggest it.
   if (!findUsableModuleForHeader(
@@ -489,6 +489,7 @@ OptionalFileEntryRef DirectoryLookup::LookupFile(
 
   SmallString<1024> TmpDir;
   if (isNormalDir()) {
+    llvm::errs() << "It->getName() 4.0.1, isSystemHeaderDirectory(): " << isSystemHeaderDirectory() << " \n";
     // Concatenate the requested file onto the directory.
     TmpDir = getDirRef()->getName();
     llvm::sys::path::append(TmpDir, Filename);
@@ -506,7 +507,7 @@ OptionalFileEntryRef DirectoryLookup::LookupFile(
         TmpDir, IncludeLoc, getDir(), isSystemHeaderDirectory(),
         RequestingModule, SuggestedModule, NeedSuggest, OpenFile);
   }
-
+  llvm::errs() << "It->getName() 4.0.2" << "\n";
   if (isFramework())
     return DoFrameworkLookup(Filename, HS, SearchPath, RelativePath,
                              RequestingModule, SuggestedModule,
@@ -516,6 +517,7 @@ OptionalFileEntryRef DirectoryLookup::LookupFile(
   const HeaderMap *HM = getHeaderMap();
   SmallString<1024> Path;
   StringRef Dest = HM->lookupFilename(Filename, Path);
+  llvm::errs() << "It->getName() 4.0.3" << "\n";
   if (Dest.empty())
     return std::nullopt;
 
@@ -548,7 +550,7 @@ OptionalFileEntryRef DirectoryLookup::LookupFile(
     Filename = StringRef(MappedName.begin(), MappedName.size());
     Dest = HM->lookupFilename(Filename, Path);
   }
-
+  llvm::errs() << "It->getName() 4.0.4" << "\n";
   if (auto Res = HS.getFileMgr().getOptionalFileRef(Dest, OpenFile)) {
     return FixupSearchPathAndFindUsableModule(*Res);
   }
@@ -557,6 +559,7 @@ OptionalFileEntryRef DirectoryLookup::LookupFile(
   // The case where the target file **exists** is handled by callee of this
   // function as part of the regular logic that applies to include search paths.
   // The case where the target file **does not exist** is handled here:
+  llvm::errs() << "It->getName() 4.0.5" << "\n";
   HS.noteLookupUsage(HS.searchDirIdx(*this), IncludeLoc);
   return std::nullopt;
 }
@@ -906,8 +909,8 @@ static bool checkAndStoreCandidate(
     // Found a second candidate from a different directory
     Diags.Report(IncludeLoc, diag::warn_header_shadowed)
         << Filename << FirstDir << CandidateDir;
-    if (SuggestedModule)
-      *SuggestedModule = FirstModule;
+    // if (SuggestedModule)
+    //   *SuggestedModule = FirstModule;
     return true;
   }
 
@@ -930,7 +933,7 @@ OptionalFileEntryRef HeaderSearch::LookupFile(
     bool BuildSystemModule, bool OpenFile, bool CacheFailures) {
   ConstSearchDirIterator CurDirLocal = nullptr;
   ConstSearchDirIterator &CurDir = CurDirArg ? *CurDirArg : CurDirLocal;
-  llvm::errs() << "Include Filename 1: " << Filename << " \n";
+  llvm::errs() << "Include Filename 1: " << Filename << ", isAngled:" << isAngled << " \n";
   if (IsMapped)
     *IsMapped = false;
 
@@ -1058,9 +1061,8 @@ OptionalFileEntryRef HeaderSearch::LookupFile(
           // Found mutiple candidates via MSVC rules
           if (Diags.isIgnored(diag::ext_pp_include_search_ms, IncludeLoc))
             return FirstHeader;
-          else
-            NeedSuggest = false;
-            break;
+          NeedSuggest = false;
+          break;
         }
         llvm::errs() << "Include Filename 3.3: " << Filename << ", IncluderAndDir.second.getName(): "
                    << IncluderAndDir.second.getName() << " \n";
@@ -1147,6 +1149,9 @@ OptionalFileEntryRef HeaderSearch::LookupFile(
       CacheLookup.MappedName =
           copyString(MappedName, LookupFileCache.getAllocator());
     }
+    // if (!First)
+    //   continue;
+
     if (IsMapped)
       // A filename is mapped when a header map remapped it to a relative path
       // used in subsequent header search or to an absolute path pointing to an
@@ -1200,6 +1205,7 @@ OptionalFileEntryRef HeaderSearch::LookupFile(
 
       // Remember this location for the next lookup we do.
       cacheLookupSuccess(CacheLookup, It, IncludeLoc); 
+      return File;
     }
 
     if (checkAndStoreCandidate(SuggestedModule, File, It->getName(), Diags,
