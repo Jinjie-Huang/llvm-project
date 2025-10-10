@@ -493,16 +493,17 @@ OptionalFileEntryRef DirectoryLookup::LookupFile(
     // Concatenate the requested file onto the directory.
     TmpDir = getDirRef()->getName();
     llvm::sys::path::append(TmpDir, Filename);
-    // if (!NeedSuggest)
-    //   return std::nullopt;
-    if (SearchPath) {
-      StringRef SearchPathRef(getDirRef()->getName());
-      SearchPath->clear();
-      SearchPath->append(SearchPathRef.begin(), SearchPathRef.end());
-    }
-    if (RelativePath) {
-      RelativePath->clear();
-      RelativePath->append(Filename.begin(), Filename.end());
+    
+    if (NeedSuggest) {
+      if (SearchPath) {
+        StringRef SearchPathRef(getDirRef()->getName());
+        SearchPath->clear();
+        SearchPath->append(SearchPathRef.begin(), SearchPathRef.end());
+      }
+      if (RelativePath) {
+        RelativePath->clear();
+        RelativePath->append(Filename.begin(), Filename.end());
+      }
     }
 
     return HS.getFileAndSuggestModule(
