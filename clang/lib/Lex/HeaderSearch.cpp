@@ -493,6 +493,8 @@ OptionalFileEntryRef DirectoryLookup::LookupFile(
     // Concatenate the requested file onto the directory.
     TmpDir = getDirRef()->getName();
     llvm::sys::path::append(TmpDir, Filename);
+    // if (!NeedSuggest)
+    //   return std::nullopt;
     if (SearchPath) {
       StringRef SearchPathRef(getDirRef()->getName());
       SearchPath->clear();
