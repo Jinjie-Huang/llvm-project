@@ -905,6 +905,7 @@ static bool checkAndStoreCandidate(
     FirstDir = CandidateDir;
     if (SuggestedModule)
       FirstModule = *SuggestedModule;
+    llvm::errs() << "4.2.1 !FirstHeader " << " \n";
     return false;
   }
 
@@ -914,8 +915,10 @@ static bool checkAndStoreCandidate(
         << Filename << FirstDir << CandidateDir;
     // if (SuggestedModule)
     //   *SuggestedModule = FirstModule;
+    llvm::errs() << "4.2.2 FirstDir != CandidateDir " << " \n";
     return true;
   }
+    llvm::errs() << "4.2.3 Found a candidate from the same directory as the first one." << " \n";
 
   // Found a candidate from the same directory as the first one
   return false;
@@ -936,7 +939,7 @@ OptionalFileEntryRef HeaderSearch::LookupFile(
     bool BuildSystemModule, bool OpenFile, bool CacheFailures) {
   ConstSearchDirIterator CurDirLocal = nullptr;
   ConstSearchDirIterator &CurDir = CurDirArg ? *CurDirArg : CurDirLocal;
-  llvm::errs() << "Include Filename 1: " << Filename << ", isAngled:" << isAngled << " \n";
+  llvm::errs() << "Include Filename 1: " << Filename << ", isAngled:" << isAngled << ", Include-next:" << (FromDir != nullptr) << " \n";
   if (IsMapped)
     *IsMapped = false;
 
@@ -1012,7 +1015,7 @@ OptionalFileEntryRef HeaderSearch::LookupFile(
               RequestingModule, SuggestedModule, NeedSuggest)) {
         if (!Includer) {
           assert(First && "only first includer can have no file");
-          llvm::errs() << "Include Filename 3.1: " << Filename << " \n";
+          llvm::errs() << "Include Filename 3.1, first found: " << Filename << " \n";
           checkAndStoreCandidate(SuggestedModule, FE, 
                                  IncluderAndDir.second.getName(), Diags,
                                  Filename, IncludeLoc, FirstModule,
@@ -1047,7 +1050,7 @@ OptionalFileEntryRef HeaderSearch::LookupFile(
           diagnoseFrameworkInclude(Diags, IncludeLoc,
                                    IncluderAndDir.second.getName(), Filename,
                                    *FE);
-          llvm::errs() << "Include Filename 3.2: " << Filename << " \n";
+          llvm::errs() << "Include Filename 3.2: first found: " << Filename << " \n";
           checkAndStoreCandidate(SuggestedModule, FE, 
               IncluderAndDir.second.getName(), Diags, Filename, IncludeLoc,
               FirstModule, FirstHeader, FirstDir);
@@ -1208,7 +1211,7 @@ OptionalFileEntryRef HeaderSearch::LookupFile(
 
       // Remember this location for the next lookup we do.
       cacheLookupSuccess(CacheLookup, It, IncludeLoc); 
-      return File;
+      // return File;
     }
 
     if (checkAndStoreCandidate(SuggestedModule, File, It->getName(), Diags,
