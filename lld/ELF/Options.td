@@ -215,6 +215,8 @@ defm eh_frame_hdr: B<"eh-frame-hdr",
 
 def emit_relocs: F<"emit-relocs">, HelpText<"Generate relocations in output">;
 
+def split_relocs : FF<"split-relocs">, HelpText<"Split relocation records into a separate sidecar file">;
+
 def enable_new_dtags: F<"enable-new-dtags">,
   HelpText<"Enable new dynamic tags (default)">;
 

@@ -1428,6 +1428,7 @@ static void readConfigs(Ctx &ctx, opt::InputArgList &args) {
       args.hasFlag(OPT_eh_frame_hdr, OPT_no_eh_frame_hdr, false);
   ctx.arg.emitLLVM = args.hasArg(OPT_lto_emit_llvm);
   ctx.arg.emitRelocs = args.hasArg(OPT_emit_relocs);
+  ctx.arg.splitRelocs = args.hasArg(OPT_split_relocs);
   ctx.arg.enableNewDtags =
       args.hasFlag(OPT_enable_new_dtags, OPT_disable_new_dtags, true);
   ctx.arg.enableNonContiguousRegions =

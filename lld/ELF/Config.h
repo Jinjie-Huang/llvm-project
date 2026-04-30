@@ -343,6 +343,7 @@ struct Config {
   bool ehFrameHdr;
   bool emitLLVM;
   bool emitRelocs;
+  bool splitRelocs = false;
   bool enableNewDtags;
   bool enableNonContiguousRegions;
   bool executeOnly;

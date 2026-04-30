@@ -71,16 +71,21 @@ private:
   void addPhdrForSection(Partition &part, unsigned shType, unsigned pType,
                          unsigned pFlags);
   void assignFileOffsets();
+  void assignSplitRelocFileOffsets();
   void assignFileOffsetsBinary();
   void setPhdrs(Partition &part);
   void checkSections();
   void fixSectionAlignments();
   void openFile();
+  void openSplitRelocFile();
   void writeTrapInstr();
   void writeHeader();
+  void writeSplitRelocHeader();
   void writeSections();
+  void writeSplitRelocSections();
   void writeSectionsBinary();
   void writeBuildId();
+  void writeSplitRelocBuildId();
 
   Ctx &ctx;
   std::unique_ptr<FileOutputBuffer> &buffer;
@@ -93,6 +98,17 @@ private:
 
   uint64_t fileSize;
   uint64_t sectionHeaderOff;
+
+  struct {
+    SmallVector<OutputSection *, 0> sections;
+    SmallVector<uint32_t, 0> shNameOffsets;
+    std::string shStrTab;
+    uint64_t fileSize = 0;
+    std::unique_ptr<FileOutputBuffer> buffer;
+    uint64_t buildIdOffset = 0;
+    uint64_t buildIdSize = 0;
+    uint32_t buildIdNameOffset = 0;
+  } splitReloc;
 };
 } // anonymous namespace
 
@@ -314,6 +330,172 @@ static OutputSection *findSection(Ctx &ctx, StringRef name,
   return nullptr;
 }
 
+template <class ELFT> void Writer<ELFT>::assignSplitRelocFileOffsets() {
+  if (splitReloc.sections.empty()) {
+    splitReloc.fileSize = 0;
+    return;
+  }
+  // 1. Construct the .shstrtab.
+  splitReloc.shStrTab.clear();
+  splitReloc.shStrTab.push_back('\0');
+  auto addString = [&](StringRef s) -> uint32_t {
+    uint32_t offset = splitReloc.shStrTab.size();
+    splitReloc.shStrTab.append(s.begin(), s.end());
+    splitReloc.shStrTab.push_back('\0');
+    return offset;
+  };
+  addString(".shstrtab");
+  splitReloc.shNameOffsets.clear();
+  for (OutputSection *sec : splitReloc.sections)
+    splitReloc.shNameOffsets.push_back(addString(sec->name));
+  // 2. If the main part has a build ID note, copy it.
+  if (ctx.mainPart->buildId && ctx.mainPart->buildId->getParent()) {
+    splitReloc.buildIdSize = ctx.mainPart->buildId->getSize();
+    splitReloc.buildIdNameOffset = addString(".note.gnu.build-id");
+  }
+
+  // 3. Assign the file layout.
+  uint64_t off = sizeof(typename ELFT::Ehdr);
+  off += splitReloc.shStrTab.size();
+  if (splitReloc.buildIdSize > 0) {
+    off = alignToPowerOf2(off, 4);
+    splitReloc.buildIdOffset = off;
+    off += splitReloc.buildIdSize;
+  }
+  for (OutputSection *sec : splitReloc.sections) {
+    off = alignToPowerOf2(off, sec->addralign);
+    sec->offset = off;
+    off += sec->size;
+  }
+
+  // 4. Section Header Table, placed at the end of the file.
+  off = alignToPowerOf2(off, ctx.arg.wordsize);
+  // null + .shstrtab + num of reloc sections + build-id section (optional)
+  uint32_t shnum =
+      2 + splitReloc.sections.size() + (splitReloc.buildIdSize > 0 ? 1 : 0);
+  off += shnum * sizeof(typename ELFT::Shdr);
+  splitReloc.fileSize = off;
+}
+
+template <class ELFT> void Writer<ELFT>::openSplitRelocFile() {
+  if (!splitReloc.fileSize)
+    return;
+
+  std::string path = ctx.arg.outputFile.str() + ".reloc";
+  unlinkAsync(path);
+  if (auto bufOrErr = FileOutputBuffer::create(path, splitReloc.fileSize, 0))
+    splitReloc.buffer = std::move(*bufOrErr);
+  else
+    Err(ctx) << "failed to open reloc file: " << bufOrErr.takeError();
+}
+
+template <class ELFT> void Writer<ELFT>::writeSplitRelocHeader() {
+  if (!splitReloc.buffer)
+    return;
+
+  uint8_t *bufStart = splitReloc.buffer->getBufferStart();
+  memset(bufStart, 0, splitReloc.fileSize);
+
+  // 1. ELF header of split reloc, copied from the main output file.
+  auto *relocEhdr = reinterpret_cast<typename ELFT::Ehdr *>(bufStart);
+  auto *mainEhdr = reinterpret_cast<typename ELFT::Ehdr *>(ctx.bufferStart);
+  memcpy(relocEhdr->e_ident, mainEhdr->e_ident, llvm::ELF::EI_NIDENT);
+  relocEhdr->e_type = llvm::ELF::ET_REL;
+  relocEhdr->e_machine = mainEhdr->e_machine;
+  relocEhdr->e_version = llvm::ELF::EV_CURRENT;
+  relocEhdr->e_ehsize = sizeof(typename ELFT::Ehdr);
+  relocEhdr->e_shentsize = sizeof(typename ELFT::Shdr);
+  relocEhdr->e_shnum =
+      2 + splitReloc.sections.size() + (splitReloc.buildIdSize > 0 ? 1 : 0);
+  relocEhdr->e_shstrndx = 1;
+
+  // 2. shstrtab
+  uint64_t shstrtabOff = sizeof(typename ELFT::Ehdr);
+  memcpy(bufStart + shstrtabOff, splitReloc.shStrTab.data(),
+         splitReloc.shStrTab.size());
+
+  // 3. Section Header Table (SHT)
+  uint64_t lastOff = shstrtabOff + splitReloc.shStrTab.size();
+  if (!splitReloc.sections.empty()) {
+    OutputSection *lastSec = splitReloc.sections.back();
+    lastOff = lastSec->offset + lastSec->size;
+  }
+  relocEhdr->e_shoff = alignToPowerOf2(lastOff, ctx.arg.wordsize);
+  auto *relocShdrs =
+      reinterpret_cast<typename ELFT::Shdr *>(bufStart + relocEhdr->e_shoff);
+  // Index 0: NULL Section
+  relocShdrs++;
+  // Index 1: .shstrtab Section Header
+  relocShdrs->sh_name = 1;
+  relocShdrs->sh_type = SHT_STRTAB;
+  relocShdrs->sh_flags = 0;
+  relocShdrs->sh_addr = 0;
+  relocShdrs->sh_offset = shstrtabOff;
+  relocShdrs->sh_size = splitReloc.shStrTab.size();
+  relocShdrs->sh_addralign = 1;
+  relocShdrs++;
+  // Index 2: .note.gnu.build-id Section Header (optional)
+  if (splitReloc.buildIdSize > 0) {
+    relocShdrs->sh_name = splitReloc.buildIdNameOffset;
+    relocShdrs->sh_type = SHT_NOTE;
+    relocShdrs->sh_flags = 0;
+    relocShdrs->sh_addr = 0;
+    relocShdrs->sh_offset = splitReloc.buildIdOffset;
+    relocShdrs->sh_size = splitReloc.buildIdSize;
+    relocShdrs->sh_link = 0;
+    relocShdrs->sh_info = 0;
+    relocShdrs->sh_addralign = 4;
+    relocShdrs->sh_entsize = 0;
+    relocShdrs++;
+  }
+  // Index 3..N: Relocation Section Headers
+  for (size_t i = 0; i < splitReloc.sections.size(); ++i) {
+    OutputSection *sec = splitReloc.sections[i];
+    relocShdrs->sh_name = splitReloc.shNameOffsets[i];
+    relocShdrs->sh_type = sec->type;
+    relocShdrs->sh_flags = sec->flags & ~SHF_ALLOC;
+    relocShdrs->sh_addr = 0;
+    relocShdrs->sh_offset = sec->offset;
+    relocShdrs->sh_size = sec->size;
+    // In standard ELF formats, 'sh_link' must index the .symtab section, and
+    // 'sh_info' must index the target section being relocated (e.g., .text).
+    // Since we are splitting relocations into a standalone sidecar file without
+    // carrying over the original symbol table and data sections, we explicitly
+    // set these to 0. Consumers (e.g., BOLT) must manually resolve these
+    // associations by cross-referencing section names (e.g., deriving ".text" 
+    // from ".rela.text") against the main ELF file.
+    relocShdrs->sh_link = 0;
+    relocShdrs->sh_info = 0;
+    relocShdrs->sh_addralign = sec->addralign;
+    relocShdrs->sh_entsize = sec->entsize;
+    relocShdrs++;
+  }
+}
+
+template <class ELFT> void Writer<ELFT>::writeSplitRelocSections() {
+  if (!splitReloc.buffer)
+    return;
+
+  llvm::TimeTraceScope timeScope("Write split relocations ELF");
+  uint8_t *bufStart = splitReloc.buffer->getBufferStart();
+
+  parallel::TaskGroup tg;
+  for (OutputSection *sec : splitReloc.sections)
+    sec->writeTo<ELFT>(ctx, bufStart + sec->offset, tg);
+}
+
+template <class ELFT> void Writer<ELFT>::writeSplitRelocBuildId() {
+  if (!splitReloc.buffer || splitReloc.buildIdSize == 0)
+    return;
+
+  OutputSection *mainSec = ctx.mainPart->buildId->getParent();
+  uint64_t mainOff = mainSec->offset + ctx.mainPart->buildId->outSecOff;
+
+  memcpy(splitReloc.buffer->getBufferStart() + splitReloc.buildIdOffset,
+         ctx.bufferStart + mainOff,
+         splitReloc.buildIdSize);
+}
+
 // The main function of the writer.
 template <class ELFT> void Writer<ELFT>::run() {
   // Now that we have a complete set of output sections. This function
@@ -388,6 +570,10 @@ template <class ELFT> void Writer<ELFT>::run() {
       if (auto e = buffer->commit())
         Err(ctx) << "failed to write output '" << buffer->getPath()
                  << "': " << std::move(e);
+      if (splitReloc.buffer) {
+        if (auto e = splitReloc.buffer->commit())
+          Err(ctx) << "failed to write split-reloc output: " << std::move(e);
+      }
     }
 
     if (!ctx.arg.cmseOutputLib.empty())
@@ -1814,6 +2000,18 @@ static void removeUnusedSyntheticSections(Ctx &ctx) {
   });
 }
 
+static bool isSplitTarget(const OutputSection *sec) {
+  StringRef name = sec->name;
+  if (!isStaticRelSecType(sec->type))
+    return false;
+  if (!name.starts_with(".rela.") && !name.starts_with(".rel."))
+    return false;
+  if (name == ".rela.dyn" || name == ".rel.dyn" || name == ".rela.plt" ||
+      name == ".rel.plt")
+    return false;
+  return true;
+}
+
 // Create output section objects and add them to OutputSections.
 template <class ELFT> void Writer<ELFT>::finalizeSections() {
   if (!ctx.arg.relocatable) {
@@ -2026,6 +2224,10 @@ template <class ELFT> void Writer<ELFT>::finalizeSections() {
       OutputSection *osec = &osd->osec;
       if (!ctx.in.shStrTab && !(osec->flags & SHF_ALLOC))
         continue;
+      if (ctx.arg.splitRelocs && isSplitTarget(osec)) {
+        splitReloc.sections.push_back(osec);
+        continue;
+      }
       ctx.outputSections.push_back(osec);
       osec->sectionIndex = ctx.outputSections.size();
       if (ctx.in.shStrTab)
@@ -2700,6 +2902,7 @@ template <class ELFT> void Writer<ELFT>::assignFileOffsets() {
                      << rangeToString(sec->offset, sec->size)
                      << "; check your linker script for overflows";
   }
+  assignSplitRelocFileOffsets();
 }
 
 // Finalize the program headers. We call this function after we assign
@@ -2909,6 +3112,8 @@ template <class ELFT> void Writer<ELFT>::writeHeader() {
 
   for (OutputSection *sec : ctx.outputSections)
     sec->writeHeaderTo<ELFT>(++sHdrs);
+
+  writeSplitRelocHeader();
 }
 
 // Open a result file.
@@ -2941,6 +3146,8 @@ template <class ELFT> void Writer<ELFT>::openFile() {
   }
   buffer = std::move(*bufferOrErr);
   ctx.bufferStart = buffer->getBufferStart();
+
+  openSplitRelocFile();
 }
 
 template <class ELFT> void Writer<ELFT>::writeSectionsBinary() {
@@ -3027,6 +3234,8 @@ template <class ELFT> void Writer<ELFT>::writeSections() {
       if (isStaticRelSecType(sec->type))
         sec->checkDynRelAddends(ctx);
   }
+
+  writeSplitRelocSections();
 }
 
 // Computes a hash value of Data using a given hash function.
@@ -3057,6 +3266,7 @@ template <class ELFT> void Writer<ELFT>::writeBuildId() {
   if (ctx.arg.buildId == BuildIdKind::Hexstring) {
     for (Partition &part : ctx.partitions)
       part.buildId->writeBuildId(ctx.arg.buildIdVector);
+    writeSplitRelocBuildId();
     return;
   }
 
@@ -3097,6 +3307,8 @@ template <class ELFT> void Writer<ELFT>::writeBuildId() {
   }
   for (Partition &part : ctx.partitions)
     part.buildId->writeBuildId(output);
+
+  writeSplitRelocBuildId();
 }
 
 template void elf::writeResult<ELF32LE>(Ctx &);
