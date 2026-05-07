@@ -602,6 +602,13 @@ private:
   const Regex FunctionFragmentTemplate{"(.*)\\.(cold|warm)(\\.[0-9]+)?"};
 
   friend class RewriteInstanceDiff;
+
+  std::unique_ptr<MemoryBuffer> RelocMemoryBuffer;
+  std::unique_ptr<object::ObjectFile> RelocFile;
+  /// Load relocations from the file specified by -split-relocs option or
+  /// from the default path. If the file is successfully loaded, return false and
+  /// set \p HasTextRelocations to true if the file contains text relocations.
+  Error loadSplitRelocations(bool &HasTextRelocations);
 };
 
 #undef ELF_FUNCTION

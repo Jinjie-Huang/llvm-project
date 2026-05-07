@@ -126,6 +126,12 @@ cl::list<std::string> DumpDotFunc(
         "takes function name patterns (regex supported)"),
     cl::value_desc("func1,func2,func3,..."), cl::Hidden, cl::cat(BoltCategory));
 
+cl::opt<std::string>
+    SplitRelocs("split-relocs",
+                cl::desc("Use split relocation file. If no path is provided, "
+                         "defaults to <input_binary>.reloc"),
+                cl::ValueOptional, cl::cat(BoltCategory));
+
 bool shouldDumpDot(const bolt::BinaryFunction &Function) {
   // If dump-dot-all is enabled, dump all functions
   if (DumpDotAll)
@@ -2197,6 +2203,58 @@ void RewriteInstance::relocateEHFrameSection() {
   check_error(std::move(E), "failed to patch EH frame");
 }
 
+Error RewriteInstance::loadSplitRelocations(bool &HasTextRelocations) {
+  if (opts::SplitRelocs.getNumOccurrences() == 0)
+    return Error::success();
+  if (HasTextRelocations) {
+    BC->outs() << "BOLT-WARNING: main binary already contains text relocations. "
+               << "Ignoring --split-relocs.\n";
+    return Error::success();
+  }
+  // Determine the path: if empty, use InputFilename + ".reloc"
+  std::string RelocPath = opts::SplitRelocs.empty()
+                              ? BC->getFilename().str() + ".reloc"
+                              : opts::SplitRelocs;
+  BC->outs() << "BOLT-INFO: loading split relocations from " << RelocPath
+             << "\n";
+
+  ErrorOr<std::unique_ptr<MemoryBuffer>> MBOrErr =
+      MemoryBuffer::getFile(RelocPath);
+  if (std::error_code EC = MBOrErr.getError()) {
+    return createStringError(errc::io_error,
+                             "cannot open split-relocs file: " + EC.message());
+  }
+  RelocMemoryBuffer = std::move(MBOrErr.get());
+
+  Expected<std::unique_ptr<object::ObjectFile>> ObjOrErr =
+      object::ObjectFile::createObjectFile(
+          RelocMemoryBuffer->getMemBufferRef());
+  if (!ObjOrErr) {
+    return createStringError(errc::executable_format_error,
+                             "invalid split-relocs ELF file");
+  }
+  RelocFile = std::move(ObjOrErr.get());
+  for (const SectionRef &Section : RelocFile->sections()) {
+    Expected<StringRef> SectionNameOrErr = Section.getName();
+    if (!SectionNameOrErr) {
+      consumeError(SectionNameOrErr.takeError());
+      continue;
+    }
+    StringRef SectionName = *SectionNameOrErr;
+    if (SectionName.starts_with(".rela.") || SectionName.starts_with(".rel.")) {
+      if (Error E = Section.getContents().takeError())
+        return E;
+      BC->registerSection(Section);
+      LLVM_DEBUG(dbgs() << "BOLT-DEBUG: registering split-reloc section "
+                        << SectionName << " size: " << Section.getSize()
+                        << "\n");
+    }
+  }
+  HasTextRelocations = (bool)BC->getUniqueSectionByName(
+      ".rela" + std::string(BC->getMainCodeSectionName()));
+  return Error::success();
+}
+
 Error RewriteInstance::readSpecialSections() {
   NamedRegionTimer T("readSpecialSections", "read special sections",
                      TimerGroupName, TimerGroupDesc, opts::TimeRewrite);
@@ -2251,6 +2309,10 @@ Error RewriteInstance::readSpecialSections() {
 
   HasTextRelocations = (bool)BC->getUniqueSectionByName(
       ".rela" + std::string(BC->getMainCodeSectionName()));
+  if (Error E = loadSplitRelocations(HasTextRelocations)) {
+    BC->errs() << "BOLT-ERROR: " << toString(std::move(E)) << "\n";
+    exit(1);
+  }
   HasSymbolTable = (bool)BC->getUniqueSectionByName(".symtab");
   EHFrameSection = BC->getUniqueSectionByName(".eh_frame");
 
@@ -2514,6 +2576,22 @@ uint32_t getRelocationSymbol(const ELFObjectFileBase *Obj,
     return getRelocationSymbol(ELF32LE, Rel);
   return getRelocationSymbol(cast<ELF64LEObjectFile>(Obj), Rel);
 }
+
+symbol_iterator getSymbolByIndexFast(const ObjectFile *InputFile, uint32_t SymIndex) {
+  static std::vector<symbol_iterator> SymCache;
+  static const ObjectFile *CachedFile = nullptr;
+  if (CachedFile != InputFile) {
+    SymCache.clear();
+    for (auto I = InputFile->symbol_begin(), E = InputFile->symbol_end(); I != E; ++I) {
+      SymCache.push_back(I);
+    }
+    CachedFile = InputFile;
+  }
+  if (SymIndex == 0 || SymIndex - 1 >= SymCache.size())
+    return InputFile->symbol_end();
+
+  return SymCache[SymIndex - 1];
+}
 } // anonymous namespace
 
 bool RewriteInstance::analyzeRelocation(
@@ -2540,12 +2618,18 @@ bool RewriteInstance::analyzeRelocation(
   assert(Value && "failed to extract relocated value");
 
   ExtractedValue = Relocation::extractValue(RType, *Value, Rel.getOffset());
-  Addend = getRelocationAddend(InputFile, Rel);
+  Addend = getRelocationAddend(cast<ELFObjectFileBase>(Rel.getObject()), Rel);
 
   const bool IsPCRelative = Relocation::isPCRelative(RType);
   const uint64_t PCRelOffset = IsPCRelative && !IsAArch64 ? Rel.getOffset() : 0;
   bool SkipVerification = false;
-  auto SymbolIter = Rel.getSymbol();
+  symbol_iterator SymbolIter = InputFile->symbol_end();
+  if (Rel.getObject() == InputFile) {
+    SymbolIter = Rel.getSymbol();
+  } else {
+    uint32_t SymIndex = getRelocationSymbol(cast<ELFObjectFileBase>(Rel.getObject()), Rel);
+    SymbolIter = getSymbolByIndexFast(InputFile, SymIndex);
+  }
   if (SymbolIter == InputFile->symbol_end()) {
     SymbolAddress = ExtractedValue - Addend + PCRelOffset;
     MCSymbol *RelSymbol =
@@ -2703,16 +2787,50 @@ void RewriteInstance::processDynamicRelocations() {
 void RewriteInstance::processRelocations() {
   if (!BC->HasRelocations)
     return;
+  auto ProcessObject = [&](object::ObjectFile *Obj) {
+    for (const SectionRef &Section : Obj->sections()) {
+      if (Section.relocation_begin() == Section.relocation_end())
+        continue;
+        
+      section_iterator SecIter = InputFile->section_end();
+      
+      if (Obj == InputFile) {
+        Expected<section_iterator> SecIterOrErr = Section.getRelocatedSection();
+        if (SecIterOrErr && *SecIterOrErr != InputFile->section_end()) {
+          SecIter = *SecIterOrErr;
+        } else if (!SecIterOrErr) {
+          consumeError(SecIterOrErr.takeError());
+        }
+      }
+      
+      if (SecIter == InputFile->section_end()) {
+        StringRef RelocSecName = cantFail(Section.getName());
+        if (RelocSecName.starts_with(".rela.") || RelocSecName.starts_with(".rel.")) {
+          StringRef TargetName = RelocSecName.drop_front(RelocSecName.starts_with(".rela.") ? 5 : 4);
+          for (auto I = InputFile->section_begin(), E = InputFile->section_end(); I != E; ++I) {
+            if (cantFail(I->getName()) == TargetName) {
+              SecIter = I;
+              break;
+            }
+          }
+        }
+      }
+      
+      if (SecIter == InputFile->section_end())
+        continue;
+      if (BinarySection(*BC, Section).isAllocatable())
+        continue;
+      StringRef SecName = cantFail(Section.getName());
+      BC->outs() << "BOLT-INFO: Successfully mapped and starting reading relocations from " 
+                 << SecName << "\n";
 
-  for (const SectionRef &Section : InputFile->sections()) {
-    section_iterator SecIter = cantFail(Section.getRelocatedSection());
-    if (SecIter == InputFile->section_end())
-      continue;
-    if (BinarySection(*BC, Section).isAllocatable())
-      continue;
+      readRelocations(Section);
+    }
+  };
 
-    readRelocations(Section);
-  }
+  ProcessObject(InputFile);
+  if (RelocFile)
+    ProcessObject(RelocFile.get());
 
   if (NumFailedRelocations)
     BC->errs() << "BOLT-WARNING: Failed to analyze " << NumFailedRelocations
@@ -2878,7 +2996,28 @@ void RewriteInstance::readRelocations(const SectionRef &Section) {
     LLVM_DEBUG(dbgs() << "BOLT-DEBUG: ignoring runtime relocations\n");
     return;
   }
-  section_iterator SecIter = cantFail(Section.getRelocatedSection());
+
+  section_iterator SecIter = InputFile->section_end();
+  if (Section.getObject() == InputFile) {
+    Expected<section_iterator> SecIterOrErr = Section.getRelocatedSection();
+    if (SecIterOrErr && *SecIterOrErr != InputFile->section_end()) {
+      SecIter = *SecIterOrErr;
+    } else if (!SecIterOrErr) {
+      consumeError(SecIterOrErr.takeError());
+    }
+  }
+  if (SecIter == InputFile->section_end()) {
+    StringRef RelocSecName = cantFail(Section.getName());
+    if (RelocSecName.starts_with(".rela.") || RelocSecName.starts_with(".rel.")) {
+      StringRef TargetName = RelocSecName.drop_front(RelocSecName.starts_with(".rela.") ? 5 : 4);
+      for (auto I = InputFile->section_begin(), E = InputFile->section_end(); I != E; ++I) {
+        if (cantFail(I->getName()) == TargetName) {
+          SecIter = I;
+          break;
+        }
+      }
+    }
+  }
   assert(SecIter != InputFile->section_end() && "relocated section expected");
   SectionRef RelocatedSection = *SecIter;
 
@@ -3020,7 +3159,14 @@ void RewriteInstance::handleRelocation(const SectionRef &RelocatedSection,
   }
 
   ErrorOr<BinarySection &> ReferencedSection{std::errc::bad_address};
-  symbol_iterator SymbolIter = Rel.getSymbol();
+  symbol_iterator SymbolIter = InputFile->symbol_end();
+  if (Rel.getObject() != InputFile) {
+    uint32_t SymIndex = getRelocationSymbol(cast<ELFObjectFileBase>(Rel.getObject()), Rel);
+    SymbolIter = getSymbolByIndexFast(InputFile, SymIndex);
+  } else {
+    SymbolIter = Rel.getSymbol();
+  }
+
   if (SymbolIter != InputFile->symbol_end()) {
     SymbolRef Symbol = *SymbolIter;
     section_iterator Section =
