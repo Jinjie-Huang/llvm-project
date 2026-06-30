@@ -39,6 +39,7 @@ static_library("Passes") {
     "PAuthGadgetScanner.cpp",
     "PLTCall.cpp",
     "PatchEntries.cpp",
+    "PerformanceAdvisor.cpp",
     "PettisAndHansen.cpp",
     "PointerAuthCFIAnalyzer.cpp",
     "PointerAuthCFIFixup.cpp",

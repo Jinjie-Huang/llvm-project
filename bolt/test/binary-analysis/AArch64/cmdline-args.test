@@ -40,7 +40,9 @@ HELP-NEXT:   =ptrauth-tail-calls     -   Tail calls performed with unprotected l
 HELP-NEXT:   =ptrauth-forward-cf     -   Unprotected calls and branches (forward control-flow)
 HELP-NEXT:   =ptrauth-sign-oracles   -   Signing of untrusted pointers (signing oracles)
 HELP-NEXT:   =ptrauth-auth-oracles   -   Authentication oracles
+HELP-NEXT:   =perf-spills            -   Hot stack spills correlated with profile data
 HELP-NEXT:   =ptrauth-all            -   All Pointer Authentication scanners
+HELP-NEXT:   =perf-all               -   All profile-correlated performance issue scanners
 HELP-NEXT:   =all                    -   All implemented scanners
 
 HELP-EMPTY:

@@ -150,14 +150,19 @@ enum GadgetKindBitmask : unsigned {
   GS_PTRAUTH_SIGN_ORACLES = (1 << 3),
   /// Scan for authentication oracles.
   GS_PTRAUTH_AUTH_ORACLES = (1 << 4),
+  /// Scan for profile-correlated performance issues caused by hot spills.
+  GS_PERF_HOT_SPILLS = (1 << 5),
 
   /// Scan for all Pointer Authentication issues.
   GS_PTRAUTH_ALL_MASK = GS_PTRAUTH_RETURN_TARGETS | GS_PTRAUTH_TAIL_CALLS |
                         GS_PTRAUTH_BRANCH_AND_CALL_TARGETS |
                         GS_PTRAUTH_SIGN_ORACLES | GS_PTRAUTH_AUTH_ORACLES,
 
+  /// Run all profile-correlated performance issue scanners.
+  GS_PERF_ALL_MASK = GS_PERF_HOT_SPILLS,
+
   /// Run all implemented scanners.
-  GS_ALL_MASK = GS_PTRAUTH_ALL_MASK,
+  GS_ALL_MASK = GS_PTRAUTH_ALL_MASK | GS_PERF_ALL_MASK,
 };
 
 } // namespace opts

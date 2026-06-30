@@ -21,6 +21,7 @@
 #include "bolt/Passes/CacheMetrics.h"
 #include "bolt/Passes/IdenticalCodeFolding.h"
 #include "bolt/Passes/PAuthGadgetScanner.h"
+#include "bolt/Passes/PerformanceAdvisor.h"
 #include "bolt/Passes/ReorderFunctions.h"
 #include "bolt/Profile/BoltAddressTranslation.h"
 #include "bolt/Profile/DataAggregator.h"
@@ -301,9 +302,13 @@ static cl::list<GadgetKindBitmask> GadgetScannersToRun(
                    "Signing of untrusted pointers (signing oracles)"),
         clEnumValN(GS_PTRAUTH_AUTH_ORACLES, "ptrauth-auth-oracles",
                    "Authentication oracles"),
+        clEnumValN(GS_PERF_HOT_SPILLS, "perf-spills",
+                   "Hot stack spills correlated with profile data"),
 
         clEnumValN(GS_PTRAUTH_ALL_MASK, "ptrauth-all",
                    "All Pointer Authentication scanners"),
+        clEnumValN(GS_PERF_ALL_MASK, "perf-all",
+                   "All profile-correlated performance issue scanners"),
         clEnumValN(GS_ALL_MASK, "all", "All implemented scanners")),
     cl::ZeroOrMore, cl::CommaSeparated, cl::cat(BinaryAnalysisCategory));
 
@@ -3968,6 +3973,11 @@ void RewriteInstance::runBinaryAnalyses() {
       EnabledAnalyses & opts::GS_PTRAUTH_ALL_MASK);
   if (PtrAuthAnalyses)
     Manager.registerPass(std::make_unique<PtrAuthScanner>(PtrAuthAnalyses));
+
+  const auto PerfAnalyses = static_cast<opts::GadgetKindBitmask>(
+      EnabledAnalyses & opts::GS_PERF_ALL_MASK);
+  if (PerfAnalyses)
+    Manager.registerPass(std::make_unique<PerformanceAdvisor>(PerfAnalyses));
 
   BC->logBOLTErrorsAndQuitOnFatal(Manager.runPasses());
 }
