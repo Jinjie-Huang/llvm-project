@@ -6,15 +6,22 @@
 # RUN:   --keep-section=.debug_line --keep-section=.debug_str --keep-section=.debug_line_str %t.o
 # RUN: %clang %cflags %t.o -o %t.exe -Wl,-q -nostdlib
 # RUN: llvm-bolt-binary-analysis %t.exe --perfdata %t.fdata --scanners=perf-spills \
-# RUN:   --lite=0 2>&1 | FileCheck %s
+# RUN:   --perf-advisor-report=%t.report --lite=0 2>&1 | FileCheck %s --check-prefix=STDOUT
+# RUN: FileCheck %s --check-prefix=REPORT < %t.report
 
-# CHECK: PERF-ADVISOR: hot stack slot traffic in function _start
-# CHECK: The instruction is {{.*}}movq{{.*}}%rax{{.*}}-0x10(%rbp)
-# CHECK: Source: pa-hot-spills.c:11:3
-# CHECK: Stack traffic: stores RAX to [RBP - 16] (8 bytes).
-# CHECK: Evidence: the same stack slot is later reloaded into RAX
-# CHECK: Reload source: pa-hot-spills.c:12:3
-# CHECK: Hint: this is a spill-like hot stack slot, not a proof that the compiler spilled a value.
+# STDOUT: BOLT-INFO: wrote performance advisor report to {{.*}}.report
+# STDOUT-NOT: PERF-ADVISOR REPORT
+
+# REPORT: PERF-ADVISOR REPORT
+# REPORT: Function: _start
+# REPORT: Function heat: {{[0-9]+}}
+# REPORT: Hot stack slot traffic
+# REPORT: Source: pa-hot-spills.c:11:3
+# REPORT: Instruction: {{.*}}movq{{.*}}%rax{{.*}}-0x10(%rbp)
+# REPORT: Stack traffic: stores RAX to [RBP - 16] (8 bytes).
+# REPORT: Evidence: the same stack slot is later reloaded into RAX
+# REPORT: Reload source: pa-hot-spills.c:12:3
+# REPORT: Hint: this is a spill-like hot stack slot, not a proof that the compiler spilled a value.
 
   .file 1 "pa-hot-spills.c"
   .globl _start

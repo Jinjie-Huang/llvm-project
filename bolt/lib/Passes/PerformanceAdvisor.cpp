@@ -10,6 +10,7 @@
 #include "bolt/Core/DebugData.h"
 #include "bolt/Core/MCInstUtils.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallSet.h"
 #include "llvm/DebugInfo/DIContext.h"
 #include "llvm/DebugInfo/DWARF/DWARFCompileUnit.h"
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
@@ -17,6 +18,7 @@
 #include "llvm/DebugInfo/DWARF/DWARFDebugLine.h"
 #include "llvm/DebugInfo/DWARF/DWARFObject.h"
 #include "llvm/Object/ObjectFile.h"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Format.h"
 
 #define DEBUG_TYPE "bolt-performance-advisor"
@@ -25,6 +27,11 @@ namespace llvm {
 namespace bolt {
 
 namespace {
+
+static cl::opt<std::string> PerfAdvisorReportFilename(
+    "perf-advisor-report",
+    cl::desc("write profile-correlated performance advisor report to file"),
+    cl::init("perf-advisor-report.txt"), cl::cat(opts::BinaryAnalysisCategory));
 
 struct HotSpillReport {
   MCInstReference Location;
@@ -46,6 +53,46 @@ struct StackAccessInfo {
   int64_t StackOffset{0};
   uint8_t Size{0};
 };
+
+struct LoopStats {
+  unsigned InstructionCount{0};
+  unsigned BodyBlockCount{0};
+  unsigned ExitEdgeCount{0};
+  unsigned ConditionalBranchCount{0};
+  unsigned CallCount{0};
+  unsigned LoadCount{0};
+  unsigned StoreCount{0};
+  unsigned VectorInstructionCount{0};
+  unsigned RegisterCount{0};
+  bool HasEarlyExit{false};
+};
+
+struct HotLoopReport {
+  BinaryFunction *Function{nullptr};
+  BinaryBasicBlock *Header{nullptr};
+  BinaryBasicBlock *Latch{nullptr};
+  uint64_t HeaderExecutionCount{0};
+  uint64_t BackedgeCount{0};
+  uint64_t LoopHeatCount{0};
+  uint64_t EstimatedTripCount{0};
+  bool HasBackedgeProfile{false};
+  LoopStats Stats;
+  bool SuggestUnroll{false};
+  bool SuggestVectorize{false};
+  bool LikelyAliasOrDependenceBlocker{false};
+  bool LikelyTripCountBlocker{false};
+  bool LikelyControlFlowBlocker{false};
+};
+
+struct FunctionAdviceReport {
+  BinaryFunction *Function{nullptr};
+  uint64_t Heat{0};
+  SmallVector<const HotSpillReport *, 4> Spills;
+  SmallVector<const HotLoopReport *, 4> Loops;
+};
+
+static std::optional<StackAccessInfo>
+getSimpleStackAccess(const BinaryContext &BC, const MCInst &Inst);
 
 template <typename T> static void iterateOverInstrs(BinaryFunction &BF, T Fn) {
   if (BF.hasCFG()) {
@@ -80,6 +127,167 @@ static std::string formatStackSlot(const BinaryContext &BC,
     OS << " + " << StackOffset;
   OS << ']';
   return OS.str();
+}
+
+static bool isVectorInstruction(const BinaryContext &BC, const MCInst &Inst) {
+  StringRef OpcodeName = BC.MII->getName(Inst.getOpcode());
+  if (OpcodeName.starts_with("V") || OpcodeName.contains("YMM") ||
+      OpcodeName.contains("ZMM"))
+    return true;
+
+  for (const MCOperand &Operand : Inst) {
+    if (!Operand.isReg() || Operand.getReg() == BC.MIB->getNoRegister())
+      continue;
+    StringRef RegName = BC.MRI->getName(Operand.getReg());
+    if (RegName.starts_with("YMM") || RegName.starts_with("ZMM"))
+      return true;
+  }
+
+  return false;
+}
+
+static bool isArithmeticLikeInstruction(const BinaryContext &BC,
+                                        const MCInst &Inst) {
+  StringRef OpcodeName = BC.MII->getName(Inst.getOpcode());
+  return OpcodeName.contains("ADD") || OpcodeName.contains("SUB") ||
+         OpcodeName.contains("MUL") || OpcodeName.contains("DIV") ||
+         OpcodeName.contains("AND") || OpcodeName.contains("OR") ||
+         OpcodeName.contains("XOR") || OpcodeName.contains("SHL") ||
+         OpcodeName.contains("SHR") || OpcodeName.contains("SAR") ||
+         OpcodeName.contains("INC") || OpcodeName.contains("DEC") ||
+         OpcodeName.contains("CMP");
+}
+
+static bool isBlockInLoop(ArrayRef<BinaryBasicBlock *> LoopBlocks,
+                          const BinaryBasicBlock *BB) {
+  return llvm::is_contained(LoopBlocks, BB);
+}
+
+static uint64_t getEdgeCount(const BinaryBasicBlock &From,
+                             const BinaryBasicBlock &To) {
+  return From.getBranchInfo(To).Count;
+}
+
+static LoopStats collectLoopStats(const BinaryContext &BC,
+                                  ArrayRef<BinaryBasicBlock *> LoopBlocks,
+                                  const BinaryBasicBlock *Header,
+                                  const BinaryBasicBlock *Latch) {
+  LoopStats Stats;
+  Stats.BodyBlockCount = LoopBlocks.size();
+  SmallSet<MCPhysReg, 32> TouchedRegisters;
+
+  for (const BinaryBasicBlock *BB : LoopBlocks) {
+    for (const MCInst &Inst : *BB) {
+      if (BC.MIB->isPseudo(Inst))
+        continue;
+
+      ++Stats.InstructionCount;
+      if (BC.MIB->isConditionalBranch(Inst))
+        ++Stats.ConditionalBranchCount;
+      if (BC.MIB->isCall(Inst))
+        ++Stats.CallCount;
+      if (isVectorInstruction(BC, Inst))
+        ++Stats.VectorInstructionCount;
+
+      const MCInstrDesc &Desc = BC.MII->get(Inst.getOpcode());
+      Stats.LoadCount += Desc.mayLoad();
+      Stats.StoreCount += Desc.mayStore();
+
+      for (const MCOperand &Operand : Inst)
+        if (Operand.isReg() && Operand.getReg() != BC.MIB->getNoRegister())
+          TouchedRegisters.insert(Operand.getReg());
+    }
+
+    for (BinaryBasicBlock *Succ : BB->successors()) {
+      if (isBlockInLoop(LoopBlocks, Succ))
+        continue;
+      ++Stats.ExitEdgeCount;
+      if (BB != Latch)
+        Stats.HasEarlyExit = true;
+    }
+  }
+
+  Stats.RegisterCount = TouchedRegisters.size();
+  // A header with multiple exits usually corresponds to an internal guard or
+  // data-dependent early break in the original loop, even if the CFG is
+  // compact.
+  if (Stats.ExitEdgeCount > 1 && Header != Latch)
+    Stats.HasEarlyExit = true;
+  return Stats;
+}
+
+static std::optional<HotLoopReport> analyzeHotLoop(BinaryFunction &BF,
+                                                   BinaryBasicBlock &Latch,
+                                                   BinaryBasicBlock &Header,
+                                                   uint64_t HotThreshold) {
+  if (!BF.hasCFG() || Latch.getLayoutIndex() < Header.getLayoutIndex())
+    return std::nullopt;
+
+  const uint64_t BackedgeCount = getEdgeCount(Latch, Header);
+  const uint64_t HeaderCount = Header.getKnownExecutionCount();
+  const uint64_t LoopHeatCount = std::max(BackedgeCount, HeaderCount);
+  const bool HasBackedgeProfile = BackedgeCount > 0;
+  if (LoopHeatCount < HotThreshold)
+    return std::nullopt;
+
+  SmallVector<BinaryBasicBlock *, 8> LoopBlocks;
+  for (BinaryBasicBlock *BB : BF.getLayout().blocks()) {
+    if (BB->getLayoutIndex() < Header.getLayoutIndex() ||
+        BB->getLayoutIndex() > Latch.getLayoutIndex())
+      continue;
+    LoopBlocks.push_back(BB);
+  }
+
+  if (LoopBlocks.empty())
+    return std::nullopt;
+
+  const BinaryContext &BC = BF.getBinaryContext();
+  LoopStats Stats = collectLoopStats(BC, LoopBlocks, &Header, &Latch);
+  const uint64_t EstimatedTripCount =
+      HasBackedgeProfile && HeaderCount ? (BackedgeCount / HeaderCount) + 1 : 0;
+
+  HotLoopReport Report;
+  Report.Function = &BF;
+  Report.Header = &Header;
+  Report.Latch = &Latch;
+  Report.HeaderExecutionCount = HeaderCount;
+  Report.BackedgeCount = BackedgeCount;
+  Report.LoopHeatCount = LoopHeatCount;
+  Report.EstimatedTripCount = EstimatedTripCount;
+  Report.HasBackedgeProfile = HasBackedgeProfile;
+  Report.Stats = Stats;
+
+  const bool SmallEnoughToUnroll = Stats.InstructionCount <= 32;
+  const bool RegisterPressureOK = Stats.RegisterCount <= 24;
+  const bool NotObviouslyUnrolled = LoopHeatCount >= HotThreshold;
+  Report.SuggestUnroll = SmallEnoughToUnroll && !Stats.HasEarlyExit &&
+                         Stats.CallCount == 0 && RegisterPressureOK &&
+                         NotObviouslyUnrolled;
+
+  const bool HasMemoryTraffic = Stats.LoadCount + Stats.StoreCount >= 2;
+  const bool HasCompute = llvm::any_of(LoopBlocks, [&](BinaryBasicBlock *BB) {
+    return llvm::any_of(*BB, [&](const MCInst &Inst) {
+      return isArithmeticLikeInstruction(BC, Inst);
+    });
+  });
+  const bool ScalarHotLoop = Stats.VectorInstructionCount == 0;
+  Report.SuggestVectorize =
+      ScalarHotLoop && HasMemoryTraffic && HasCompute && Stats.CallCount == 0 &&
+      (LoopHeatCount >= HotThreshold || EstimatedTripCount >= 8);
+
+  Report.LikelyAliasOrDependenceBlocker =
+      Report.SuggestVectorize && Stats.LoadCount > 0 && Stats.StoreCount > 0;
+  Report.LikelyTripCountBlocker =
+      Report.SuggestVectorize &&
+      (EstimatedTripCount >= 16 || !HasBackedgeProfile ||
+       LoopHeatCount >= std::max<uint64_t>(HotThreshold * 8, 1000));
+  Report.LikelyControlFlowBlocker =
+      Report.SuggestVectorize &&
+      (Stats.HasEarlyExit || Stats.ConditionalBranchCount > 1);
+
+  if (!Report.SuggestUnroll && !Report.SuggestVectorize)
+    return std::nullopt;
+  return Report;
 }
 
 static std::optional<std::string> getSourceLocation(const BinaryContext &BC,
@@ -183,39 +391,53 @@ static std::optional<std::string> getSourceLocation(const BinaryContext &BC,
   return FormatLine(*FileName, Row.Line, Row.Column, Row.Discriminator);
 }
 
-static void printHotSpillReport(raw_ostream &OS, const BinaryContext &BC,
-                                const HotSpillReport &Report) {
+static std::optional<std::string>
+getHotSpillSourceLocation(const BinaryContext &BC,
+                          const HotSpillReport &Report) {
+  return getSourceLocation(BC, Report.Location.getMCInst(),
+                           Report.Location.computeAddress());
+}
+
+static std::optional<std::string>
+getHotLoopSourceLocation(const BinaryContext &BC, const HotLoopReport &Report) {
+  if (Report.Header->empty())
+    return std::nullopt;
+  const uint64_t HeaderInputAddress =
+      Report.Function->getAddress() + Report.Header->getInputOffset();
+  return getSourceLocation(BC, Report.Header->front(), HeaderInputAddress);
+}
+
+static void printHotSpillAdvice(raw_ostream &OS, const BinaryContext &BC,
+                                const HotSpillReport &Report, unsigned Index) {
   const BinaryFunction *BF = Report.Location.getFunction();
   const BinaryBasicBlock *BB = Report.Location.getBasicBlock();
   const uint64_t Address = Report.Location.computeAddress();
   const uint64_t ReloadAddress = Report.ReloadLocation.computeAddress();
 
-  OS << "\nPERF-ADVISOR: hot stack slot traffic in function "
-     << BF->getPrintName();
+  OS << "  [" << Index << "] Hot stack slot traffic";
   if (BB)
     OS << ", basic block " << BB->getName();
   OS << ", at address " << llvm::format("%x", Address) << "\n";
-
-  OS << "  The instruction is ";
-  BC.printInstruction(OS, Report.Location, Address, BF);
   if (std::optional<std::string> SourceLoc =
-          getSourceLocation(BC, Report.Location.getMCInst(), Address))
-    OS << "  Source: " << *SourceLoc << "\n";
+          getHotSpillSourceLocation(BC, Report))
+    OS << "      Source: " << *SourceLoc << "\n";
 
-  OS << "  Profile: containing block/function execution count is "
+  OS << "      Instruction: ";
+  BC.printInstruction(OS, Report.Location, Address, BF);
+  OS << "      Heat: containing block/function execution count is "
      << Report.ExecutionCount << "; function entry count is "
      << BF->getKnownExecutionCount() << ".\n";
-  OS << "  Stack traffic: stores " << BC.MRI->getName(Report.SrcReg) << " to "
-     << formatStackSlot(BC, Report.StackPtrReg, Report.StackOffset) << " ("
-     << static_cast<unsigned>(Report.Size) << " bytes).\n";
-  OS << "  Evidence: the same stack slot is later reloaded into "
+  OS << "      Stack traffic: stores " << BC.MRI->getName(Report.SrcReg)
+     << " to " << formatStackSlot(BC, Report.StackPtrReg, Report.StackOffset)
+     << " (" << static_cast<unsigned>(Report.Size) << " bytes).\n";
+  OS << "      Evidence: the same stack slot is later reloaded into "
      << BC.MRI->getName(Report.ReloadReg) << " at address "
      << llvm::format("%x", ReloadAddress) << ": ";
   BC.printInstruction(OS, Report.ReloadLocation, ReloadAddress, BF);
   if (std::optional<std::string> SourceLoc = getSourceLocation(
           BC, Report.ReloadLocation.getMCInst(), ReloadAddress))
-    OS << "  Reload source: " << *SourceLoc << "\n";
-  OS << "  Hint: this is a spill-like hot stack slot, not a proof that the "
+    OS << "      Reload source: " << *SourceLoc << "\n";
+  OS << "      Hint: this is a spill-like hot stack slot, not a proof that the "
         "compiler spilled a value. RBP/RSP-relative slots can also be real "
         "locals, and such locals are still optimization candidates when they "
         "do not need a stable memory address. Check whether the source-level "
@@ -224,6 +446,99 @@ static void printHotSpillReport(raw_ostream &OS, const BinaryContext &BC,
         "shortening live ranges, splitting complex expressions, enabling "
         "stronger optimization, or restructuring the code may keep the value "
         "in a register and remove this hot stack traffic.\n";
+}
+
+static void printHotLoopAdvice(raw_ostream &OS, const BinaryContext &BC,
+                               const HotLoopReport &Report, unsigned Index) {
+  OS << "  [" << Index << "] Hot loop, header " << Report.Header->getName()
+     << ", latch " << Report.Latch->getName() << "\n";
+  if (std::optional<std::string> SourceLoc =
+          getHotLoopSourceLocation(BC, Report))
+    OS << "      Source: " << *SourceLoc << "\n";
+  OS << "      Heat: header execution count is " << Report.HeaderExecutionCount
+     << "; backedge count is " << Report.BackedgeCount
+     << "; loop heat count is " << Report.LoopHeatCount;
+  if (Report.HasBackedgeProfile)
+    OS << "; estimated trip count is " << Report.EstimatedTripCount << ".\n";
+  else
+    OS << "; estimated trip count is unknown because the profile has no "
+          "recorded loop backedge samples.\n";
+  OS << "      Loop shape: " << Report.Stats.BodyBlockCount << " block(s), "
+     << Report.Stats.InstructionCount << " instruction(s), "
+     << Report.Stats.ExitEdgeCount << " exit edge(s), "
+     << Report.Stats.LoadCount << " load(s), " << Report.Stats.StoreCount
+     << " store(s), " << Report.Stats.RegisterCount
+     << " touched register(s).\n";
+
+  if (Report.SuggestUnroll) {
+    OS << "      Unroll hint: this is a very hot, compact loop with no obvious "
+          "early exit, no calls, and moderate register pressure. The binary "
+          "does not look obviously unrolled, so consider source-level "
+          "unrolling, `#pragma clang loop unroll(enable)`, or tuning "
+          "`-mllvm -unroll-threshold`/profile-guided options for this hot "
+          "path. Because the observed trip count is high, the advisor uses a "
+          "more aggressive threshold than the compiler's default static "
+          "heuristic.\n";
+  }
+
+  if (Report.SuggestVectorize) {
+    OS << "      Vectorization hint: this hot scalar loop has memory traffic "
+          "and "
+          "regular arithmetic but no obvious SIMD/vector instructions. Check "
+          "why the compiler kept it scalar. ";
+    if (Report.LikelyAliasOrDependenceBlocker)
+      OS << "A likely blocker is pointer aliasing, memory overlap, or "
+            "cross-iteration memory dependence; if the source semantics allow "
+            "it, add `__restrict__`, alignment assumptions, or split arrays to "
+            "make independence explicit. ";
+    if (Report.LikelyControlFlowBlocker)
+      OS << "The loop also has internal control flow/early exits; consider "
+            "if-conversion, peeling the rare exit, or separating the hot "
+            "straight-line path. ";
+    if (Report.LikelyTripCountBlocker)
+      OS << "The observed loop heat is high"
+         << (Report.HasBackedgeProfile ? ", and the observed backedge/trip "
+                                         "count is high; "
+                                       : "; the exact trip count is unknown "
+                                         "because branch-edge samples are not "
+                                         "available; ")
+         << "if the compiler believed the trip count was small or unknown, "
+            "pass PGO, add `#pragma clang loop vectorize(enable)`, or expose "
+            "the minimum trip count in the source. ";
+    OS << "Use optimization remarks (`-Rpass-missed=loop-vectorize`) on the "
+          "source build to confirm the exact compiler-side reason.\n";
+  }
+}
+
+static void printFunctionAdviceReport(raw_ostream &OS, const BinaryContext &BC,
+                                      ArrayRef<FunctionAdviceReport> Reports) {
+  if (Reports.empty())
+    return;
+
+  OS << "\nPERF-ADVISOR REPORT\n";
+  OS << "===================\n";
+  OS << "Functions are sorted by hottest advisor evidence. Source locations "
+        "point to the instruction/loop header that triggered the hint.\n";
+
+  unsigned FunctionIndex = 1;
+  for (const FunctionAdviceReport &FunctionReport : Reports) {
+    const BinaryFunction *BF = FunctionReport.Function;
+    OS << "\n#" << FunctionIndex++ << " Function: " << BF->getPrintName()
+       << "\n";
+    OS << "  Function heat: " << FunctionReport.Heat
+       << "; function entry count: " << BF->getKnownExecutionCount()
+       << "; raw sample count: " << BF->getRawSampleCount() << "\n";
+    OS << "  Hint count: "
+       << FunctionReport.Spills.size() + FunctionReport.Loops.size()
+       << " (spills: " << FunctionReport.Spills.size()
+       << ", loops: " << FunctionReport.Loops.size() << ")\n";
+
+    unsigned HintIndex = 1;
+    for (const HotLoopReport *Loop : FunctionReport.Loops)
+      printHotLoopAdvice(OS, BC, *Loop, HintIndex++);
+    for (const HotSpillReport *Spill : FunctionReport.Spills)
+      printHotSpillAdvice(OS, BC, *Spill, HintIndex++);
+  }
 }
 
 static std::optional<StackAccessInfo>
@@ -329,21 +644,39 @@ Error PerformanceAdvisor::runOnFunctions(BinaryContext &BC) {
   if (!BC.isX86())
     return Error::success();
 
-  if (!(EnabledScanners & opts::GS_PERF_HOT_SPILLS))
+  const bool RunHotSpillScanner = EnabledScanners & opts::GS_PERF_HOT_SPILLS;
+  const bool RunHotLoopScanner = EnabledScanners & opts::GS_PERF_HOT_LOOPS;
+  if (!RunHotSpillScanner && !RunHotLoopScanner)
     return Error::success();
 
   const uint64_t HotThreshold = std::max<uint64_t>(BC.getHotThreshold(), 1);
   std::vector<HotSpillReport> Reports;
+  std::vector<HotLoopReport> LoopReports;
 
   for (BinaryFunction *BF : BC.getAllBinaryFunctions()) {
     if (!BF || BF->isIgnored())
       continue;
 
-    iterateOverInstrs(*BF, [&](MCInstReference InstRef) {
-      if (std::optional<HotSpillReport> Report =
-              analyzeHotSpill(*BF, InstRef, HotThreshold))
-        Reports.push_back(*Report);
-    });
+    if (RunHotSpillScanner) {
+      iterateOverInstrs(*BF, [&](MCInstReference InstRef) {
+        if (std::optional<HotSpillReport> Report =
+                analyzeHotSpill(*BF, InstRef, HotThreshold))
+          Reports.push_back(*Report);
+      });
+    }
+
+    if (RunHotLoopScanner && BF->hasCFG()) {
+      BF->getLayout().updateLayoutIndices();
+      for (BinaryBasicBlock &Latch : *BF) {
+        for (BinaryBasicBlock *Succ : Latch.successors()) {
+          if (Succ->getLayoutIndex() > Latch.getLayoutIndex())
+            continue;
+          if (std::optional<HotLoopReport> Report =
+                  analyzeHotLoop(*BF, Latch, *Succ, HotThreshold))
+            LoopReports.push_back(*Report);
+        }
+      }
+    }
   }
 
   llvm::sort(Reports, [](const HotSpillReport &A, const HotSpillReport &B) {
@@ -352,8 +685,63 @@ Error PerformanceAdvisor::runOnFunctions(BinaryContext &BC) {
     return A.Location.computeAddress() < B.Location.computeAddress();
   });
 
-  for (const HotSpillReport &Report : Reports)
-    printHotSpillReport(BC.outs(), BC, Report);
+  llvm::sort(LoopReports, [](const HotLoopReport &A, const HotLoopReport &B) {
+    if (A.LoopHeatCount != B.LoopHeatCount)
+      return A.LoopHeatCount > B.LoopHeatCount;
+    return A.Header->getInputOffset() < B.Header->getInputOffset();
+  });
+
+  SmallVector<FunctionAdviceReport, 8> FunctionReports;
+  auto GetOrCreateFunctionReport =
+      [&](BinaryFunction *BF) -> FunctionAdviceReport & {
+    auto It =
+        llvm::find_if(FunctionReports, [&](const FunctionAdviceReport &R) {
+          return R.Function == BF;
+        });
+    if (It != FunctionReports.end())
+      return *It;
+    FunctionReports.push_back(FunctionAdviceReport{BF});
+    FunctionReports.back().Heat =
+        std::max(BF->getKnownExecutionCount(), BF->getRawSampleCount());
+    return FunctionReports.back();
+  };
+
+  for (const HotLoopReport &Report : LoopReports) {
+    FunctionAdviceReport &FunctionReport =
+        GetOrCreateFunctionReport(Report.Function);
+    FunctionReport.Loops.push_back(&Report);
+    FunctionReport.Heat = std::max(FunctionReport.Heat, Report.LoopHeatCount);
+  }
+
+  for (const HotSpillReport &Report : Reports) {
+    FunctionAdviceReport &FunctionReport = GetOrCreateFunctionReport(
+        const_cast<BinaryFunction *>(Report.Location.getFunction()));
+    FunctionReport.Spills.push_back(&Report);
+    FunctionReport.Heat = std::max(FunctionReport.Heat, Report.ExecutionCount);
+  }
+
+  llvm::sort(FunctionReports,
+             [](const FunctionAdviceReport &A, const FunctionAdviceReport &B) {
+               if (A.Heat != B.Heat)
+                 return A.Heat > B.Heat;
+               return A.Function->getPrintName() < B.Function->getPrintName();
+             });
+
+  if (FunctionReports.empty())
+    return Error::success();
+
+  std::error_code EC;
+  raw_fd_ostream ReportOS(PerfAdvisorReportFilename, EC, sys::fs::OF_Text);
+  if (EC)
+    return errorCodeToError(EC);
+
+  printFunctionAdviceReport(ReportOS, BC, FunctionReports);
+  ReportOS.close();
+  if (ReportOS.has_error())
+    return errorCodeToError(ReportOS.error());
+
+  BC.outs() << "BOLT-INFO: wrote performance advisor report to "
+            << PerfAdvisorReportFilename << "\n";
 
   return Error::success();
 }

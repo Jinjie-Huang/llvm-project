@@ -152,6 +152,8 @@ enum GadgetKindBitmask : unsigned {
   GS_PTRAUTH_AUTH_ORACLES = (1 << 4),
   /// Scan for profile-correlated performance issues caused by hot spills.
   GS_PERF_HOT_SPILLS = (1 << 5),
+  /// Scan for profile-correlated loop optimization opportunities.
+  GS_PERF_HOT_LOOPS = (1 << 6),
 
   /// Scan for all Pointer Authentication issues.
   GS_PTRAUTH_ALL_MASK = GS_PTRAUTH_RETURN_TARGETS | GS_PTRAUTH_TAIL_CALLS |
@@ -159,7 +161,7 @@ enum GadgetKindBitmask : unsigned {
                         GS_PTRAUTH_SIGN_ORACLES | GS_PTRAUTH_AUTH_ORACLES,
 
   /// Run all profile-correlated performance issue scanners.
-  GS_PERF_ALL_MASK = GS_PERF_HOT_SPILLS,
+  GS_PERF_ALL_MASK = GS_PERF_HOT_SPILLS | GS_PERF_HOT_LOOPS,
 
   /// Run all implemented scanners.
   GS_ALL_MASK = GS_PTRAUTH_ALL_MASK | GS_PERF_ALL_MASK,
