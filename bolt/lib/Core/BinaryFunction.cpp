@@ -61,7 +61,6 @@ extern cl::OptionCategory BoltCategory;
 extern cl::OptionCategory BoltOptCategory;
 
 extern cl::opt<bool> EnableBAT;
-extern cl::opt<bool> Instrument;
 extern cl::list<std::string> PrintOnly;
 extern cl::opt<std::string> PrintOnlyFile;
 extern cl::opt<bool> StrictMode;
@@ -1982,7 +1981,8 @@ void BinaryFunction::postProcessEntryPoints() {
     // reference to the entry point and hence we cannot move this entry
     // point. Optimizing without moving could be difficult.
     // In aggregation, register any known entry points for CFG construction.
-    if (!BC.HasRelocations && !opts::AggregateOnly)
+    if (!BC.HasRelocations && !opts::AggregateOnly &&
+        !opts::isFuncProbeInstrumentation())
       setSimple(false);
 
     const uint32_t Offset = KV.first;
@@ -2616,7 +2616,7 @@ void BinaryFunction::postProcessCFG() {
   // in the pipeline, but the IO address map that is derived from these offsets
   // does add non-trivial overhead and can get expensive -- that's why we don't
   // add offsets to every single instruction.
-  if (!requiresPreciseAddressMap() && !opts::Instrument) {
+  if (!requiresPreciseAddressMap() && !opts::isCounterInstrumentation()) {
     for (BinaryBasicBlock &BB : blocks())
       for (MCInst &Inst : BB)
         BC.MIB->clearOffset(Inst);
@@ -3296,8 +3296,8 @@ bool BinaryFunction::requiresAddressMap() const {
   if (isInjected())
     return false;
 
-  return isMultiEntry() || !getInternalRefDataRelocations().empty() ||
-         requiresPreciseAddressMap();
+  return shouldMoveToNewAddress() || isMultiEntry() ||
+         !getInternalRefDataRelocations().empty() || requiresPreciseAddressMap();
 }
 
 uint64_t BinaryFunction::getInstructionCount() const {
@@ -4540,7 +4540,7 @@ void BinaryFunction::updateOutputValues(const BOLTLinker &Linker) {
   setOutputAddress(SymbolInfo->Address);
   setOutputSize(SymbolInfo->Size);
 
-  if (BC.HasRelocations || isInjected()) {
+  if (BC.HasRelocations || isInjected() || shouldMoveToNewAddress()) {
     if (hasConstantIsland()) {
       const auto IslandLabelSymInfo =
           Linker.lookupSymbolInfo(getFunctionConstantIslandLabel()->getName());
@@ -4610,7 +4610,7 @@ void BinaryFunction::updateOutputValues(const BOLTLinker &Linker) {
     BinaryBasicBlock *PrevBB = nullptr;
     for (BinaryBasicBlock *const BB : FF) {
       assert(BB->getLabel()->isDefined() && "symbol should be defined");
-      if (!BC.HasRelocations) {
+      if (!BC.HasRelocations && !shouldMoveToNewAddress()) {
         if (BB->isSplit())
           assert(FragmentBaseAddress == FF.getAddress());
         else

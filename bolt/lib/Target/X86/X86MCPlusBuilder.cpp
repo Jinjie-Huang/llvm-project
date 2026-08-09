@@ -111,23 +111,40 @@ public:
 
   unsigned getInvertedCondCode(unsigned CC) const override {
     switch (CC) {
-    default: return X86::COND_INVALID;
-    case X86::COND_E:  return X86::COND_NE;
-    case X86::COND_NE: return X86::COND_E;
-    case X86::COND_L:  return X86::COND_GE;
-    case X86::COND_LE: return X86::COND_G;
-    case X86::COND_G:  return X86::COND_LE;
-    case X86::COND_GE: return X86::COND_L;
-    case X86::COND_B:  return X86::COND_AE;
-    case X86::COND_BE: return X86::COND_A;
-    case X86::COND_A:  return X86::COND_BE;
-    case X86::COND_AE: return X86::COND_B;
-    case X86::COND_S:  return X86::COND_NS;
-    case X86::COND_NS: return X86::COND_S;
-    case X86::COND_P:  return X86::COND_NP;
-    case X86::COND_NP: return X86::COND_P;
-    case X86::COND_O:  return X86::COND_NO;
-    case X86::COND_NO: return X86::COND_O;
+    default:
+      return X86::COND_INVALID;
+    case X86::COND_E:
+      return X86::COND_NE;
+    case X86::COND_NE:
+      return X86::COND_E;
+    case X86::COND_L:
+      return X86::COND_GE;
+    case X86::COND_LE:
+      return X86::COND_G;
+    case X86::COND_G:
+      return X86::COND_LE;
+    case X86::COND_GE:
+      return X86::COND_L;
+    case X86::COND_B:
+      return X86::COND_AE;
+    case X86::COND_BE:
+      return X86::COND_A;
+    case X86::COND_A:
+      return X86::COND_BE;
+    case X86::COND_AE:
+      return X86::COND_B;
+    case X86::COND_S:
+      return X86::COND_NS;
+    case X86::COND_NS:
+      return X86::COND_S;
+    case X86::COND_P:
+      return X86::COND_NP;
+    case X86::COND_NP:
+      return X86::COND_P;
+    case X86::COND_O:
+      return X86::COND_NO;
+    case X86::COND_NO:
+      return X86::COND_O;
     }
   }
 
@@ -144,17 +161,28 @@ public:
 
     auto decodeCondCode = [&](unsigned CC) -> uint8_t {
       switch (CC) {
-      default: return DCC_INVALID;
-      case X86::COND_E: return DCC_EQUAL;
-      case X86::COND_NE: return DCC_GREATER | DCC_LESSER;
-      case X86::COND_L: return DCC_LESSER | DCC_SIGNED;
-      case X86::COND_LE: return DCC_EQUAL | DCC_LESSER | DCC_SIGNED;
-      case X86::COND_G: return DCC_GREATER | DCC_SIGNED;
-      case X86::COND_GE: return DCC_GREATER | DCC_EQUAL | DCC_SIGNED;
-      case X86::COND_B: return DCC_LESSER | DCC_UNSIGNED;
-      case X86::COND_BE: return DCC_EQUAL | DCC_LESSER | DCC_UNSIGNED;
-      case X86::COND_A: return DCC_GREATER | DCC_UNSIGNED;
-      case X86::COND_AE: return DCC_GREATER | DCC_EQUAL | DCC_UNSIGNED;
+      default:
+        return DCC_INVALID;
+      case X86::COND_E:
+        return DCC_EQUAL;
+      case X86::COND_NE:
+        return DCC_GREATER | DCC_LESSER;
+      case X86::COND_L:
+        return DCC_LESSER | DCC_SIGNED;
+      case X86::COND_LE:
+        return DCC_EQUAL | DCC_LESSER | DCC_SIGNED;
+      case X86::COND_G:
+        return DCC_GREATER | DCC_SIGNED;
+      case X86::COND_GE:
+        return DCC_GREATER | DCC_EQUAL | DCC_SIGNED;
+      case X86::COND_B:
+        return DCC_LESSER | DCC_UNSIGNED;
+      case X86::COND_BE:
+        return DCC_EQUAL | DCC_LESSER | DCC_UNSIGNED;
+      case X86::COND_A:
+        return DCC_GREATER | DCC_UNSIGNED;
+      case X86::COND_AE:
+        return DCC_GREATER | DCC_EQUAL | DCC_UNSIGNED;
       }
     };
 
@@ -167,21 +195,36 @@ public:
       return X86::COND_INVALID;
 
     switch (DCC) {
-    default: return X86::COND_INVALID;
-    case DCC_EQUAL | DCC_LESSER | DCC_SIGNED: return X86::COND_LE;
-    case DCC_EQUAL | DCC_LESSER | DCC_UNSIGNED: return X86::COND_BE;
-    case DCC_EQUAL | DCC_GREATER | DCC_SIGNED: return X86::COND_GE;
-    case DCC_EQUAL | DCC_GREATER | DCC_UNSIGNED: return X86::COND_AE;
-    case DCC_GREATER | DCC_LESSER | DCC_SIGNED: return X86::COND_NE;
-    case DCC_GREATER | DCC_LESSER | DCC_UNSIGNED: return X86::COND_NE;
-    case DCC_GREATER | DCC_LESSER: return X86::COND_NE;
-    case DCC_EQUAL | DCC_SIGNED: return X86::COND_E;
-    case DCC_EQUAL | DCC_UNSIGNED: return X86::COND_E;
-    case DCC_EQUAL: return X86::COND_E;
-    case DCC_LESSER | DCC_SIGNED: return X86::COND_L;
-    case DCC_LESSER | DCC_UNSIGNED: return X86::COND_B;
-    case DCC_GREATER | DCC_SIGNED: return X86::COND_G;
-    case DCC_GREATER | DCC_UNSIGNED: return X86::COND_A;
+    default:
+      return X86::COND_INVALID;
+    case DCC_EQUAL | DCC_LESSER | DCC_SIGNED:
+      return X86::COND_LE;
+    case DCC_EQUAL | DCC_LESSER | DCC_UNSIGNED:
+      return X86::COND_BE;
+    case DCC_EQUAL | DCC_GREATER | DCC_SIGNED:
+      return X86::COND_GE;
+    case DCC_EQUAL | DCC_GREATER | DCC_UNSIGNED:
+      return X86::COND_AE;
+    case DCC_GREATER | DCC_LESSER | DCC_SIGNED:
+      return X86::COND_NE;
+    case DCC_GREATER | DCC_LESSER | DCC_UNSIGNED:
+      return X86::COND_NE;
+    case DCC_GREATER | DCC_LESSER:
+      return X86::COND_NE;
+    case DCC_EQUAL | DCC_SIGNED:
+      return X86::COND_E;
+    case DCC_EQUAL | DCC_UNSIGNED:
+      return X86::COND_E;
+    case DCC_EQUAL:
+      return X86::COND_E;
+    case DCC_LESSER | DCC_SIGNED:
+      return X86::COND_L;
+    case DCC_LESSER | DCC_UNSIGNED:
+      return X86::COND_B;
+    case DCC_GREATER | DCC_SIGNED:
+      return X86::COND_G;
+    case DCC_GREATER | DCC_UNSIGNED:
+      return X86::COND_A;
     }
   }
 
@@ -986,17 +1029,39 @@ public:
       break;
     }
     // Report simple stack accesses
-    case X86::MOV8rm: I = {1, true, false, false, true}; break;
-    case X86::MOV16rm: I = {2, true, false, false, true}; break;
-    case X86::MOV32rm: I = {4, true, false, false, true}; break;
-    case X86::MOV64rm: I = {8, true, false, false, true}; break;
-    case X86::MOV8mr: I = {1, false, true, true, true};  break;
-    case X86::MOV16mr: I = {2, false, true, true, true};  break;
-    case X86::MOV32mr: I = {4, false, true, true, true};  break;
-    case X86::MOV64mr: I = {8, false, true, true, true};  break;
-    case X86::MOV8mi: I = {1, false, true, false, true}; break;
-    case X86::MOV16mi: I = {2, false, true, false, true}; break;
-    case X86::MOV32mi: I = {4, false, true, false, true}; break;
+    case X86::MOV8rm:
+      I = {1, true, false, false, true};
+      break;
+    case X86::MOV16rm:
+      I = {2, true, false, false, true};
+      break;
+    case X86::MOV32rm:
+      I = {4, true, false, false, true};
+      break;
+    case X86::MOV64rm:
+      I = {8, true, false, false, true};
+      break;
+    case X86::MOV8mr:
+      I = {1, false, true, true, true};
+      break;
+    case X86::MOV16mr:
+      I = {2, false, true, true, true};
+      break;
+    case X86::MOV32mr:
+      I = {4, false, true, true, true};
+      break;
+    case X86::MOV64mr:
+      I = {8, false, true, true, true};
+      break;
+    case X86::MOV8mi:
+      I = {1, false, true, false, true};
+      break;
+    case X86::MOV16mi:
+      I = {2, false, true, false, true};
+      break;
+    case X86::MOV32mi:
+      I = {4, false, true, false, true};
+      break;
     } // end switch (Inst.getOpcode())
 
     std::optional<X86MemOperand> MO = evaluateX86MemoryOperand(Inst);
@@ -1060,14 +1125,30 @@ public:
       llvm_unreachable("Unhandled opcode");
       return;
     }
-    case X86::MOV16rm: I = {2, true, false}; break;
-    case X86::MOV32rm: I = {4, true, false}; break;
-    case X86::MOV64rm: I = {8, true, false}; break;
-    case X86::MOV16mr: I = {2, false, true};  break;
-    case X86::MOV32mr: I = {4, false, true};  break;
-    case X86::MOV64mr: I = {8, false, true};  break;
-    case X86::MOV16mi: I = {2, false, false}; break;
-    case X86::MOV32mi: I = {4, false, false}; break;
+    case X86::MOV16rm:
+      I = {2, true, false};
+      break;
+    case X86::MOV32rm:
+      I = {4, true, false};
+      break;
+    case X86::MOV64rm:
+      I = {8, true, false};
+      break;
+    case X86::MOV16mr:
+      I = {2, false, true};
+      break;
+    case X86::MOV32mr:
+      I = {4, false, true};
+      break;
+    case X86::MOV64mr:
+      I = {8, false, true};
+      break;
+    case X86::MOV16mi:
+      I = {2, false, false};
+      break;
+    case X86::MOV32mi:
+      I = {4, false, false};
+      break;
     } // end switch (Inst.getOpcode())
 
     std::optional<X86MemOperand> MO = evaluateX86MemoryOperand(Inst);
@@ -1085,9 +1166,15 @@ public:
     unsigned NewOpcode = 0;
     if (I.IsLoad) {
       switch (I.DataSize) {
-      case 2: NewOpcode = X86::POP16r; break;
-      case 4: NewOpcode = X86::POP32r; break;
-      case 8: NewOpcode = X86::POP64r; break;
+      case 2:
+        NewOpcode = X86::POP16r;
+        break;
+      case 4:
+        NewOpcode = X86::POP32r;
+        break;
+      case 8:
+        NewOpcode = X86::POP64r;
+        break;
       default:
         llvm_unreachable("Unexpected size");
       }
@@ -1100,9 +1187,15 @@ public:
           Inst.getOperand(MemOpOffset + X86::AddrSegmentReg + 1);
       if (I.StoreFromReg) {
         switch (I.DataSize) {
-        case 2: NewOpcode = X86::PUSH16r; break;
-        case 4: NewOpcode = X86::PUSH32r; break;
-        case 8: NewOpcode = X86::PUSH64r; break;
+        case 2:
+          NewOpcode = X86::PUSH16r;
+          break;
+        case 4:
+          NewOpcode = X86::PUSH32r;
+          break;
+        case 8:
+          NewOpcode = X86::PUSH64r;
+          break;
         default:
           llvm_unreachable("Unexpected size");
         }
@@ -1113,9 +1206,15 @@ public:
         Inst.addOperand(MCOperand::createReg(RegOpndNum));
       } else {
         switch (I.DataSize) {
-        case 2: NewOpcode = X86::PUSH16i8; break;
-        case 4: NewOpcode = X86::PUSH32i8; break;
-        case 8: NewOpcode = X86::PUSH64i32; break;
+        case 2:
+          NewOpcode = X86::PUSH16i8;
+          break;
+        case 4:
+          NewOpcode = X86::PUSH32i8;
+          break;
+        case 8:
+          NewOpcode = X86::PUSH64i32;
+          break;
         default:
           llvm_unreachable("Unexpected size");
         }
@@ -1351,93 +1450,167 @@ public:
     switch (Inst.getOpcode()) {
     default: {
       switch (getPopSize(Inst)) {
-      case 2:            I = {2, false, {{NOCHECK, X86::MOV16ri}}};  break;
-      case 4:            I = {4, false, {{NOCHECK, X86::MOV32ri}}};  break;
-      case 8:            I = {8, false, {{CHECK32, X86::MOV64ri32},
-                                         {NOCHECK, X86::MOV64rm}}};  break;
-      default:           return false;
+      case 2:
+        I = {2, false, {{NOCHECK, X86::MOV16ri}}};
+        break;
+      case 4:
+        I = {4, false, {{NOCHECK, X86::MOV32ri}}};
+        break;
+      case 8:
+        I = {8, false, {{CHECK32, X86::MOV64ri32}, {NOCHECK, X86::MOV64rm}}};
+        break;
+      default:
+        return false;
       }
       break;
     }
 
     // MOV
-    case X86::MOV8rm:      I = {1, false, {{NOCHECK, X86::MOV8ri}}};   break;
-    case X86::MOV16rm:     I = {2, false, {{NOCHECK, X86::MOV16ri}}};  break;
-    case X86::MOV32rm:     I = {4, false, {{NOCHECK, X86::MOV32ri}}};  break;
-    case X86::MOV64rm:     I = {8, false, {{CHECK32, X86::MOV64ri32},
-                                           {NOCHECK, X86::MOV64rm}}};  break;
+    case X86::MOV8rm:
+      I = {1, false, {{NOCHECK, X86::MOV8ri}}};
+      break;
+    case X86::MOV16rm:
+      I = {2, false, {{NOCHECK, X86::MOV16ri}}};
+      break;
+    case X86::MOV32rm:
+      I = {4, false, {{NOCHECK, X86::MOV32ri}}};
+      break;
+    case X86::MOV64rm:
+      I = {8, false, {{CHECK32, X86::MOV64ri32}, {NOCHECK, X86::MOV64rm}}};
+      break;
 
     // MOVZX
-    case X86::MOVZX16rm8:  I = {1, false, {{NOCHECK, X86::MOV16ri}}};  break;
-    case X86::MOVZX32rm8:  I = {1, false, {{NOCHECK, X86::MOV32ri}}};  break;
-    case X86::MOVZX32rm16: I = {2, false, {{NOCHECK, X86::MOV32ri}}};  break;
+    case X86::MOVZX16rm8:
+      I = {1, false, {{NOCHECK, X86::MOV16ri}}};
+      break;
+    case X86::MOVZX32rm8:
+      I = {1, false, {{NOCHECK, X86::MOV32ri}}};
+      break;
+    case X86::MOVZX32rm16:
+      I = {2, false, {{NOCHECK, X86::MOV32ri}}};
+      break;
 
     // CMP
-    case X86::CMP8rm:      I = {1, false, {{NOCHECK, X86::CMP8ri}}};   break;
-    case X86::CMP16rm:     I = {2, false, {{CHECK8,  X86::CMP16ri8},
-                                           {NOCHECK, X86::CMP16ri}}};  break;
-    case X86::CMP32rm:     I = {4, false, {{CHECK8,  X86::CMP32ri8},
-                                           {NOCHECK, X86::CMP32ri}}};  break;
-    case X86::CMP64rm:     I = {8, false, {{CHECK8,  X86::CMP64ri8},
-                                           {CHECK32, X86::CMP64ri32},
-                                           {NOCHECK, X86::CMP64rm}}};  break;
+    case X86::CMP8rm:
+      I = {1, false, {{NOCHECK, X86::CMP8ri}}};
+      break;
+    case X86::CMP16rm:
+      I = {2, false, {{CHECK8, X86::CMP16ri8}, {NOCHECK, X86::CMP16ri}}};
+      break;
+    case X86::CMP32rm:
+      I = {4, false, {{CHECK8, X86::CMP32ri8}, {NOCHECK, X86::CMP32ri}}};
+      break;
+    case X86::CMP64rm:
+      I = {8,
+           false,
+           {{CHECK8, X86::CMP64ri8},
+            {CHECK32, X86::CMP64ri32},
+            {NOCHECK, X86::CMP64rm}}};
+      break;
 
     // TEST
-    case X86::TEST8mr:     I = {1, false, {{NOCHECK, X86::TEST8ri}}};  break;
-    case X86::TEST16mr:    I = {2, false, {{NOCHECK, X86::TEST16ri}}}; break;
-    case X86::TEST32mr:    I = {4, false, {{NOCHECK, X86::TEST32ri}}}; break;
-    case X86::TEST64mr:    I = {8, false, {{CHECK32, X86::TEST64ri32},
-                                           {NOCHECK, X86::TEST64mr}}}; break;
+    case X86::TEST8mr:
+      I = {1, false, {{NOCHECK, X86::TEST8ri}}};
+      break;
+    case X86::TEST16mr:
+      I = {2, false, {{NOCHECK, X86::TEST16ri}}};
+      break;
+    case X86::TEST32mr:
+      I = {4, false, {{NOCHECK, X86::TEST32ri}}};
+      break;
+    case X86::TEST64mr:
+      I = {8, false, {{CHECK32, X86::TEST64ri32}, {NOCHECK, X86::TEST64mr}}};
+      break;
 
     // ADD
-    case X86::ADD8rm:      I = {1, true,  {{NOCHECK, X86::ADD8ri}}};   break;
-    case X86::ADD16rm:     I = {2, true,  {{CHECK8,  X86::ADD16ri8},
-                                           {NOCHECK, X86::ADD16ri}}};  break;
-    case X86::ADD32rm:     I = {4, true,  {{CHECK8,  X86::ADD32ri8},
-                                           {NOCHECK, X86::ADD32ri}}};  break;
-    case X86::ADD64rm:     I = {8, true,  {{CHECK8,  X86::ADD64ri8},
-                                           {CHECK32, X86::ADD64ri32},
-                                           {NOCHECK, X86::ADD64rm}}};  break;
+    case X86::ADD8rm:
+      I = {1, true, {{NOCHECK, X86::ADD8ri}}};
+      break;
+    case X86::ADD16rm:
+      I = {2, true, {{CHECK8, X86::ADD16ri8}, {NOCHECK, X86::ADD16ri}}};
+      break;
+    case X86::ADD32rm:
+      I = {4, true, {{CHECK8, X86::ADD32ri8}, {NOCHECK, X86::ADD32ri}}};
+      break;
+    case X86::ADD64rm:
+      I = {8,
+           true,
+           {{CHECK8, X86::ADD64ri8},
+            {CHECK32, X86::ADD64ri32},
+            {NOCHECK, X86::ADD64rm}}};
+      break;
 
     // SUB
-    case X86::SUB8rm:      I = {1, true,  {{NOCHECK, X86::SUB8ri}}};   break;
-    case X86::SUB16rm:     I = {2, true,  {{CHECK8,  X86::SUB16ri8},
-                                           {NOCHECK, X86::SUB16ri}}};  break;
-    case X86::SUB32rm:     I = {4, true,  {{CHECK8,  X86::SUB32ri8},
-                                           {NOCHECK, X86::SUB32ri}}};  break;
-    case X86::SUB64rm:     I = {8, true,  {{CHECK8,  X86::SUB64ri8},
-                                           {CHECK32, X86::SUB64ri32},
-                                           {NOCHECK, X86::SUB64rm}}};  break;
+    case X86::SUB8rm:
+      I = {1, true, {{NOCHECK, X86::SUB8ri}}};
+      break;
+    case X86::SUB16rm:
+      I = {2, true, {{CHECK8, X86::SUB16ri8}, {NOCHECK, X86::SUB16ri}}};
+      break;
+    case X86::SUB32rm:
+      I = {4, true, {{CHECK8, X86::SUB32ri8}, {NOCHECK, X86::SUB32ri}}};
+      break;
+    case X86::SUB64rm:
+      I = {8,
+           true,
+           {{CHECK8, X86::SUB64ri8},
+            {CHECK32, X86::SUB64ri32},
+            {NOCHECK, X86::SUB64rm}}};
+      break;
 
     // AND
-    case X86::AND8rm:      I = {1, true,  {{NOCHECK, X86::AND8ri}}};   break;
-    case X86::AND16rm:     I = {2, true,  {{CHECK8,  X86::AND16ri8},
-                                           {NOCHECK, X86::AND16ri}}};  break;
-    case X86::AND32rm:     I = {4, true,  {{CHECK8,  X86::AND32ri8},
-                                           {NOCHECK, X86::AND32ri}}};  break;
-    case X86::AND64rm:     I = {8, true,  {{CHECK8,  X86::AND64ri8},
-                                           {CHECK32, X86::AND64ri32},
-                                           {NOCHECK, X86::AND64rm}}};  break;
+    case X86::AND8rm:
+      I = {1, true, {{NOCHECK, X86::AND8ri}}};
+      break;
+    case X86::AND16rm:
+      I = {2, true, {{CHECK8, X86::AND16ri8}, {NOCHECK, X86::AND16ri}}};
+      break;
+    case X86::AND32rm:
+      I = {4, true, {{CHECK8, X86::AND32ri8}, {NOCHECK, X86::AND32ri}}};
+      break;
+    case X86::AND64rm:
+      I = {8,
+           true,
+           {{CHECK8, X86::AND64ri8},
+            {CHECK32, X86::AND64ri32},
+            {NOCHECK, X86::AND64rm}}};
+      break;
 
     // OR
-    case X86::OR8rm:       I = {1, true,  {{NOCHECK, X86::OR8ri}}};    break;
-    case X86::OR16rm:      I = {2, true,  {{CHECK8,  X86::OR16ri8},
-                                           {NOCHECK, X86::OR16ri}}};   break;
-    case X86::OR32rm:      I = {4, true,  {{CHECK8,  X86::OR32ri8},
-                                           {NOCHECK, X86::OR32ri}}};   break;
-    case X86::OR64rm:      I = {8, true,  {{CHECK8,  X86::OR64ri8},
-                                           {CHECK32, X86::OR64ri32},
-                                           {NOCHECK, X86::OR64rm}}};   break;
+    case X86::OR8rm:
+      I = {1, true, {{NOCHECK, X86::OR8ri}}};
+      break;
+    case X86::OR16rm:
+      I = {2, true, {{CHECK8, X86::OR16ri8}, {NOCHECK, X86::OR16ri}}};
+      break;
+    case X86::OR32rm:
+      I = {4, true, {{CHECK8, X86::OR32ri8}, {NOCHECK, X86::OR32ri}}};
+      break;
+    case X86::OR64rm:
+      I = {8,
+           true,
+           {{CHECK8, X86::OR64ri8},
+            {CHECK32, X86::OR64ri32},
+            {NOCHECK, X86::OR64rm}}};
+      break;
 
     // XOR
-    case X86::XOR8rm:      I = {1, true,  {{NOCHECK, X86::XOR8ri}}};   break;
-    case X86::XOR16rm:     I = {2, true,  {{CHECK8,  X86::XOR16ri8},
-                                           {NOCHECK, X86::XOR16ri}}};  break;
-    case X86::XOR32rm:     I = {4, true,  {{CHECK8,  X86::XOR32ri8},
-                                           {NOCHECK, X86::XOR32ri}}};  break;
-    case X86::XOR64rm:     I = {8, true,  {{CHECK8,  X86::XOR64ri8},
-                                           {CHECK32, X86::XOR64ri32},
-                                           {NOCHECK, X86::XOR64rm}}};  break;
+    case X86::XOR8rm:
+      I = {1, true, {{NOCHECK, X86::XOR8ri}}};
+      break;
+    case X86::XOR16rm:
+      I = {2, true, {{CHECK8, X86::XOR16ri8}, {NOCHECK, X86::XOR16ri}}};
+      break;
+    case X86::XOR32rm:
+      I = {4, true, {{CHECK8, X86::XOR32ri8}, {NOCHECK, X86::XOR32ri}}};
+      break;
+    case X86::XOR64rm:
+      I = {8,
+           true,
+           {{CHECK8, X86::XOR64ri8},
+            {CHECK32, X86::XOR64ri32},
+            {NOCHECK, X86::XOR64rm}}};
+      break;
     }
 
     // Compute the immediate value.
@@ -1492,19 +1665,34 @@ public:
     switch (Inst.getOpcode()) {
     default: {
       switch (getPopSize(Inst)) {
-      case 2:            NewOpcode = X86::MOV16rr; break;
-      case 4:            NewOpcode = X86::MOV32rr; break;
-      case 8:            NewOpcode = X86::MOV64rr; break;
-      default:           return false;
+      case 2:
+        NewOpcode = X86::MOV16rr;
+        break;
+      case 4:
+        NewOpcode = X86::MOV32rr;
+        break;
+      case 8:
+        NewOpcode = X86::MOV64rr;
+        break;
+      default:
+        return false;
       }
       break;
     }
 
     // MOV
-    case X86::MOV8rm:      NewOpcode = X86::MOV8rr;   break;
-    case X86::MOV16rm:     NewOpcode = X86::MOV16rr;  break;
-    case X86::MOV32rm:     NewOpcode = X86::MOV32rr;  break;
-    case X86::MOV64rm:     NewOpcode = X86::MOV64rr;  break;
+    case X86::MOV8rm:
+      NewOpcode = X86::MOV8rr;
+      break;
+    case X86::MOV16rm:
+      NewOpcode = X86::MOV16rr;
+      break;
+    case X86::MOV32rm:
+      NewOpcode = X86::MOV32rr;
+      break;
+    case X86::MOV64rm:
+      NewOpcode = X86::MOV64rr;
+      break;
     }
 
     // Modify the instruction.
@@ -1645,9 +1833,9 @@ public:
     Inst.insert(Inst.begin(),
                 MCOperand::createReg(X86::NoRegister)); // IndexReg
     Inst.insert(Inst.begin(),
-                MCOperand::createImm(1));               // ScaleAmt
+                MCOperand::createImm(1)); // ScaleAmt
     Inst.insert(Inst.begin(),
-                MCOperand::createReg(X86::RIP));        // BaseReg
+                MCOperand::createReg(X86::RIP)); // BaseReg
 
     Code.emplace_back(Inst);
     return Code;
@@ -1711,7 +1899,8 @@ public:
       }
     } else {
       // If it's arithmetic instruction check if signed operand fits in 1 byte.
-      const unsigned ShortOpcode = X86::getOpcodeForShortImmediateForm(OldOpcode);
+      const unsigned ShortOpcode =
+          X86::getOpcodeForShortImmediateForm(OldOpcode);
       if (ShortOpcode != OldOpcode &&
           Inst.getOperand(MCPlus::getNumPrimeOperands(Inst) - 1).isImm()) {
         int64_t Imm =
@@ -2286,9 +2475,15 @@ public:
     default:
       llvm_unreachable("Invalid operand size");
       return;
-    case 2:      NewOpcode = X86::MOV16mr; break;
-    case 4:      NewOpcode = X86::MOV32mr; break;
-    case 8:      NewOpcode = X86::MOV64mr; break;
+    case 2:
+      NewOpcode = X86::MOV16mr;
+      break;
+    case 4:
+      NewOpcode = X86::MOV32mr;
+      break;
+    case 8:
+      NewOpcode = X86::MOV64mr;
+      break;
     }
     Inst.setOpcode(NewOpcode);
     Inst.clear();
@@ -2317,9 +2512,15 @@ public:
     default:
       llvm_unreachable("Invalid operand size");
       return;
-    case 2:      NewOpcode = X86::MOV16rm; break;
-    case 4:      NewOpcode = X86::MOV32rm; break;
-    case 8:      NewOpcode = X86::MOV64rm; break;
+    case 2:
+      NewOpcode = X86::MOV16rm;
+      break;
+    case 4:
+      NewOpcode = X86::MOV32rm;
+      break;
+    case 8:
+      NewOpcode = X86::MOV64rm;
+      break;
     }
     Inst.setOpcode(NewOpcode);
     Inst.clear();
@@ -2330,7 +2531,7 @@ public:
     if (OffsetExpr)
       Inst.addOperand(MCOperand::createExpr(OffsetExpr)); // Displacement
     else
-      Inst.addOperand(MCOperand::createImm(Offset)); // Displacement
+      Inst.addOperand(MCOperand::createImm(Offset));       // Displacement
     Inst.addOperand(MCOperand::createReg(AddrSegmentReg)); // AddrSegmentReg
   }
 
@@ -2392,13 +2593,11 @@ public:
                             .addImm(0)
                             .addReg(X86::NoRegister));
     else
-      Code.emplace_back(MCInstBuilder(X86::MOV64rr)
-                            .addReg(X86::RAX)
-                            .addReg(X86::RDI));
+      Code.emplace_back(
+          MCInstBuilder(X86::MOV64rr).addReg(X86::RAX).addReg(X86::RDI));
 
-    Code.emplace_back(MCInstBuilder(X86::MOV32rr)
-                          .addReg(X86::ECX)
-                          .addReg(X86::EDX));
+    Code.emplace_back(
+        MCInstBuilder(X86::MOV32rr).addReg(X86::ECX).addReg(X86::EDX));
     Code.emplace_back(MCInstBuilder(X86::REP_MOVSB_64));
 
     return Code;
@@ -2420,9 +2619,8 @@ public:
                           .addImm(0)
                           .addReg(X86::NoRegister)
                           .addReg(X86::CL));
-    Code.emplace_back(MCInstBuilder(X86::MOV64rr)
-                          .addReg(X86::RAX)
-                          .addReg(X86::RDI));
+    Code.emplace_back(
+        MCInstBuilder(X86::MOV64rr).addReg(X86::RAX).addReg(X86::RDI));
     return Code;
   }
 
@@ -2430,9 +2628,7 @@ public:
                                   const MCSymbol *Target,
                                   MCContext *Ctx) const override {
     InstructionListType Code;
-    Code.emplace_back(MCInstBuilder(X86::CMP64ri8)
-                          .addReg(RegNo)
-                          .addImm(Imm));
+    Code.emplace_back(MCInstBuilder(X86::CMP64ri8).addReg(RegNo).addImm(Imm));
     Code.emplace_back(MCInstBuilder(X86::JCC_1)
                           .addExpr(MCSymbolRefExpr::create(Target, *Ctx))
                           .addImm(X86::COND_E));
@@ -2464,10 +2660,18 @@ public:
       switch (FKI.TargetSize) {
       default:
         return std::nullopt;
-      case  8: RelType = ELF::R_X86_64_PC8; break;
-      case 16: RelType = ELF::R_X86_64_PC16; break;
-      case 32: RelType = ELF::R_X86_64_PC32; break;
-      case 64: RelType = ELF::R_X86_64_PC64; break;
+      case 8:
+        RelType = ELF::R_X86_64_PC8;
+        break;
+      case 16:
+        RelType = ELF::R_X86_64_PC16;
+        break;
+      case 32:
+        RelType = ELF::R_X86_64_PC32;
+        break;
+      case 64:
+        RelType = ELF::R_X86_64_PC64;
+        break;
       }
       // Adjust PC-relative fixup offsets, which are calculated from the start
       // of the next instruction.
@@ -2476,10 +2680,18 @@ public:
       switch (FKI.TargetSize) {
       default:
         return std::nullopt;
-      case  8: RelType = ELF::R_X86_64_8; break;
-      case 16: RelType = ELF::R_X86_64_16; break;
-      case 32: RelType = ELF::R_X86_64_32; break;
-      case 64: RelType = ELF::R_X86_64_64; break;
+      case 8:
+        RelType = ELF::R_X86_64_8;
+        break;
+      case 16:
+        RelType = ELF::R_X86_64_16;
+        break;
+      case 32:
+        RelType = ELF::R_X86_64_32;
+        break;
+      case 64:
+        RelType = ELF::R_X86_64_64;
+        break;
       }
     }
 
@@ -2546,100 +2758,184 @@ public:
     default: {
       switch (getPushSize(Inst)) {
 
-      case 2: I = {2, false, {{CHECK8, X86::PUSH16i8}, {NOCHECK, X86::PUSH16i}}}; break;
-      case 4: I = {4, false, {{CHECK8, X86::PUSH32i8}, {NOCHECK, X86::PUSH32i}}}; break;
-      case 8: I = {8, false, {{CHECK8, X86::PUSH64i8},
-                              {CHECK32, X86::PUSH64i32},
-                              {NOCHECK, Inst.getOpcode()}}}; break;
-      default: return false;
+      case 2:
+        I = {2, false, {{CHECK8, X86::PUSH16i8}, {NOCHECK, X86::PUSH16i}}};
+        break;
+      case 4:
+        I = {4, false, {{CHECK8, X86::PUSH32i8}, {NOCHECK, X86::PUSH32i}}};
+        break;
+      case 8:
+        I = {8,
+             false,
+             {{CHECK8, X86::PUSH64i8},
+              {CHECK32, X86::PUSH64i32},
+              {NOCHECK, Inst.getOpcode()}}};
+        break;
+      default:
+        return false;
       }
       break;
     }
 
     // MOV
-    case X86::MOV8rr:       I = {1, false, {{NOCHECK, X86::MOV8ri}}}; break;
-    case X86::MOV16rr:      I = {2, false, {{NOCHECK, X86::MOV16ri}}}; break;
-    case X86::MOV32rr:      I = {4, false, {{NOCHECK, X86::MOV32ri}}}; break;
-    case X86::MOV64rr:      I = {8, false, {{CHECK32, X86::MOV64ri32},
-                                            {NOCHECK, X86::MOV64ri}}}; break;
+    case X86::MOV8rr:
+      I = {1, false, {{NOCHECK, X86::MOV8ri}}};
+      break;
+    case X86::MOV16rr:
+      I = {2, false, {{NOCHECK, X86::MOV16ri}}};
+      break;
+    case X86::MOV32rr:
+      I = {4, false, {{NOCHECK, X86::MOV32ri}}};
+      break;
+    case X86::MOV64rr:
+      I = {8, false, {{CHECK32, X86::MOV64ri32}, {NOCHECK, X86::MOV64ri}}};
+      break;
 
-    case X86::MOV8mr:       I = {1, false, {{NOCHECK, X86::MOV8mi}}}; break;
-    case X86::MOV16mr:      I = {2, false, {{NOCHECK, X86::MOV16mi}}}; break;
-    case X86::MOV32mr:      I = {4, false, {{NOCHECK, X86::MOV32mi}}}; break;
-    case X86::MOV64mr:      I = {8, false, {{CHECK32, X86::MOV64mi32},
-                                            {NOCHECK, X86::MOV64mr}}}; break;
+    case X86::MOV8mr:
+      I = {1, false, {{NOCHECK, X86::MOV8mi}}};
+      break;
+    case X86::MOV16mr:
+      I = {2, false, {{NOCHECK, X86::MOV16mi}}};
+      break;
+    case X86::MOV32mr:
+      I = {4, false, {{NOCHECK, X86::MOV32mi}}};
+      break;
+    case X86::MOV64mr:
+      I = {8, false, {{CHECK32, X86::MOV64mi32}, {NOCHECK, X86::MOV64mr}}};
+      break;
 
     // MOVZX
-    case X86::MOVZX16rr8:   I = {1, false, {{NOCHECK, X86::MOV16ri}}}; break;
-    case X86::MOVZX32rr8:   I = {1, false, {{NOCHECK, X86::MOV32ri}}}; break;
-    case X86::MOVZX32rr16:  I = {2, false, {{NOCHECK, X86::MOV32ri}}}; break;
+    case X86::MOVZX16rr8:
+      I = {1, false, {{NOCHECK, X86::MOV16ri}}};
+      break;
+    case X86::MOVZX32rr8:
+      I = {1, false, {{NOCHECK, X86::MOV32ri}}};
+      break;
+    case X86::MOVZX32rr16:
+      I = {2, false, {{NOCHECK, X86::MOV32ri}}};
+      break;
 
     // CMP
-    case X86::CMP8rr:       I = {1, false, {{NOCHECK, X86::CMP8ri}}}; break;
-    case X86::CMP16rr:      I = {2, false, {{CHECK8, X86::CMP16ri8},
-                                            {NOCHECK, X86::CMP16ri}}}; break;
-    case X86::CMP32rr:      I = {4, false, {{CHECK8, X86::CMP32ri8},
-                                            {NOCHECK, X86::CMP32ri}}}; break;
-    case X86::CMP64rr:      I = {8, false, {{CHECK8, X86::CMP64ri8},
-                                            {CHECK32, X86::CMP64ri32},
-                                            {NOCHECK, X86::CMP64rr}}}; break;
+    case X86::CMP8rr:
+      I = {1, false, {{NOCHECK, X86::CMP8ri}}};
+      break;
+    case X86::CMP16rr:
+      I = {2, false, {{CHECK8, X86::CMP16ri8}, {NOCHECK, X86::CMP16ri}}};
+      break;
+    case X86::CMP32rr:
+      I = {4, false, {{CHECK8, X86::CMP32ri8}, {NOCHECK, X86::CMP32ri}}};
+      break;
+    case X86::CMP64rr:
+      I = {8,
+           false,
+           {{CHECK8, X86::CMP64ri8},
+            {CHECK32, X86::CMP64ri32},
+            {NOCHECK, X86::CMP64rr}}};
+      break;
 
     // TEST
-    case X86::TEST8rr:      I = {1, false, {{NOCHECK, X86::TEST8ri}}}; break;
-    case X86::TEST16rr:     I = {2, false, {{NOCHECK, X86::TEST16ri}}}; break;
-    case X86::TEST32rr:     I = {4, false, {{NOCHECK, X86::TEST32ri}}}; break;
-    case X86::TEST64rr:     I = {8, false, {{CHECK32, X86::TEST64ri32},
-                                            {NOCHECK, X86::TEST64rr}}}; break;
+    case X86::TEST8rr:
+      I = {1, false, {{NOCHECK, X86::TEST8ri}}};
+      break;
+    case X86::TEST16rr:
+      I = {2, false, {{NOCHECK, X86::TEST16ri}}};
+      break;
+    case X86::TEST32rr:
+      I = {4, false, {{NOCHECK, X86::TEST32ri}}};
+      break;
+    case X86::TEST64rr:
+      I = {8, false, {{CHECK32, X86::TEST64ri32}, {NOCHECK, X86::TEST64rr}}};
+      break;
 
     // ADD
-    case X86::ADD8rr:       I = {1, true, {{NOCHECK, X86::ADD8ri}}}; break;
-    case X86::ADD16rr:      I = {2, true, {{CHECK8, X86::ADD16ri8},
-                                           {NOCHECK, X86::ADD16ri}}}; break;
-    case X86::ADD32rr:      I = {4, true, {{CHECK8, X86::ADD32ri8},
-                                           {NOCHECK, X86::ADD32ri}}}; break;
-    case X86::ADD64rr:      I = {8, true, {{CHECK8, X86::ADD64ri8},
-                                           {CHECK32, X86::ADD64ri32},
-                                           {NOCHECK, X86::ADD64rr}}}; break;
+    case X86::ADD8rr:
+      I = {1, true, {{NOCHECK, X86::ADD8ri}}};
+      break;
+    case X86::ADD16rr:
+      I = {2, true, {{CHECK8, X86::ADD16ri8}, {NOCHECK, X86::ADD16ri}}};
+      break;
+    case X86::ADD32rr:
+      I = {4, true, {{CHECK8, X86::ADD32ri8}, {NOCHECK, X86::ADD32ri}}};
+      break;
+    case X86::ADD64rr:
+      I = {8,
+           true,
+           {{CHECK8, X86::ADD64ri8},
+            {CHECK32, X86::ADD64ri32},
+            {NOCHECK, X86::ADD64rr}}};
+      break;
 
     // SUB
-    case X86::SUB8rr:       I = {1, true, {{NOCHECK, X86::SUB8ri}}}; break;
-    case X86::SUB16rr:      I = {2, true, {{CHECK8, X86::SUB16ri8},
-                                           {NOCHECK, X86::SUB16ri}}}; break;
-    case X86::SUB32rr:      I = {4, true, {{CHECK8, X86::SUB32ri8},
-                                           {NOCHECK, X86::SUB32ri}}}; break;
-    case X86::SUB64rr:      I = {8, true, {{CHECK8, X86::SUB64ri8},
-                                           {CHECK32, X86::SUB64ri32},
-                                           {NOCHECK, X86::SUB64rr}}}; break;
+    case X86::SUB8rr:
+      I = {1, true, {{NOCHECK, X86::SUB8ri}}};
+      break;
+    case X86::SUB16rr:
+      I = {2, true, {{CHECK8, X86::SUB16ri8}, {NOCHECK, X86::SUB16ri}}};
+      break;
+    case X86::SUB32rr:
+      I = {4, true, {{CHECK8, X86::SUB32ri8}, {NOCHECK, X86::SUB32ri}}};
+      break;
+    case X86::SUB64rr:
+      I = {8,
+           true,
+           {{CHECK8, X86::SUB64ri8},
+            {CHECK32, X86::SUB64ri32},
+            {NOCHECK, X86::SUB64rr}}};
+      break;
 
     // AND
-    case X86::AND8rr:       I = {1, true, {{NOCHECK, X86::AND8ri}}}; break;
-    case X86::AND16rr:      I = {2, true, {{CHECK8, X86::AND16ri8},
-                                           {NOCHECK, X86::AND16ri}}}; break;
-    case X86::AND32rr:      I = {4, true, {{CHECK8, X86::AND32ri8},
-                                           {NOCHECK, X86::AND32ri}}}; break;
-    case X86::AND64rr:      I = {8, true, {{CHECK8, X86::AND64ri8},
-                                           {CHECK32, X86::AND64ri32},
-                                           {NOCHECK, X86::AND64rr}}}; break;
+    case X86::AND8rr:
+      I = {1, true, {{NOCHECK, X86::AND8ri}}};
+      break;
+    case X86::AND16rr:
+      I = {2, true, {{CHECK8, X86::AND16ri8}, {NOCHECK, X86::AND16ri}}};
+      break;
+    case X86::AND32rr:
+      I = {4, true, {{CHECK8, X86::AND32ri8}, {NOCHECK, X86::AND32ri}}};
+      break;
+    case X86::AND64rr:
+      I = {8,
+           true,
+           {{CHECK8, X86::AND64ri8},
+            {CHECK32, X86::AND64ri32},
+            {NOCHECK, X86::AND64rr}}};
+      break;
 
     // OR
-    case X86::OR8rr:        I = {1, true, {{NOCHECK, X86::OR8ri}}}; break;
-    case X86::OR16rr:       I = {2, true, {{CHECK8, X86::OR16ri8},
-                                           {NOCHECK, X86::OR16ri}}}; break;
-    case X86::OR32rr:       I = {4, true, {{CHECK8, X86::OR32ri8},
-                                           {NOCHECK, X86::OR32ri}}}; break;
-    case X86::OR64rr:       I = {8, true, {{CHECK8, X86::OR64ri8},
-                                           {CHECK32, X86::OR64ri32},
-                                           {NOCHECK, X86::OR64rr}}}; break;
+    case X86::OR8rr:
+      I = {1, true, {{NOCHECK, X86::OR8ri}}};
+      break;
+    case X86::OR16rr:
+      I = {2, true, {{CHECK8, X86::OR16ri8}, {NOCHECK, X86::OR16ri}}};
+      break;
+    case X86::OR32rr:
+      I = {4, true, {{CHECK8, X86::OR32ri8}, {NOCHECK, X86::OR32ri}}};
+      break;
+    case X86::OR64rr:
+      I = {8,
+           true,
+           {{CHECK8, X86::OR64ri8},
+            {CHECK32, X86::OR64ri32},
+            {NOCHECK, X86::OR64rr}}};
+      break;
 
     // XOR
-    case X86::XOR8rr:       I = {1, true, {{NOCHECK, X86::XOR8ri}}}; break;
-    case X86::XOR16rr:      I = {2, true, {{CHECK8, X86::XOR16ri8},
-                                           {NOCHECK, X86::XOR16ri}}}; break;
-    case X86::XOR32rr:      I = {4, true, {{CHECK8, X86::XOR32ri8},
-                                           {NOCHECK, X86::XOR32ri}}}; break;
-    case X86::XOR64rr:      I = {8, true, {{CHECK8, X86::XOR64ri8},
-                                           {CHECK32, X86::XOR64ri32},
-                                           {NOCHECK, X86::XOR64rr}}}; break;
+    case X86::XOR8rr:
+      I = {1, true, {{NOCHECK, X86::XOR8ri}}};
+      break;
+    case X86::XOR16rr:
+      I = {2, true, {{CHECK8, X86::XOR16ri8}, {NOCHECK, X86::XOR16ri}}};
+      break;
+    case X86::XOR32rr:
+      I = {4, true, {{CHECK8, X86::XOR32ri8}, {NOCHECK, X86::XOR32ri}}};
+      break;
+    case X86::XOR64rr:
+      I = {8,
+           true,
+           {{CHECK8, X86::XOR64ri8},
+            {CHECK32, X86::XOR64ri32},
+            {NOCHECK, X86::XOR64rr}}};
+      break;
     }
 
     // Compute the new opcode.
@@ -2771,6 +3067,92 @@ public:
         MCOperand::createExpr(MCSymbolRefExpr::create(Target, *Ctx)));
   }
 
+  InstructionListType createInstrumentedFunctionCall(const MCSymbol *Target,
+                                                     MCContext *Ctx) override {
+    InstructionListType Insts;
+    auto PushReg = [&](MCPhysReg Reg) {
+      createPushRegister(Insts.emplace_back(), Reg, 8);
+    };
+    auto PopReg = [&](MCPhysReg Reg) {
+      createPopRegister(Insts.emplace_back(), Reg, 8);
+    };
+    auto CreateFPStateAccess = [&](unsigned Opcode) {
+      MCInst &Inst = Insts.emplace_back();
+      Inst.setOpcode(Opcode);
+      Inst.addOperand(MCOperand::createReg(X86::RSP));
+      Inst.addOperand(MCOperand::createImm(1));
+      Inst.addOperand(MCOperand::createReg(X86::NoRegister));
+      Inst.addOperand(MCOperand::createImm(0));
+      Inst.addOperand(MCOperand::createReg(X86::NoRegister));
+    };
+
+    createStackPointerIncrement(Insts.emplace_back(), 128,
+                                /*NoFlagsClobber=*/true);
+    PushReg(X86::RAX);
+    PushReg(X86::RCX);
+    PushReg(X86::RDX);
+    PushReg(X86::RSI);
+    PushReg(X86::RDI);
+    PushReg(X86::R8);
+    PushReg(X86::R9);
+    PushReg(X86::R10);
+    PushReg(X86::R11);
+    createPushFlags(Insts.emplace_back(), 8);
+
+    Insts.emplace_back(
+        MCInstBuilder(X86::MOV64rr).addReg(X86::R11).addReg(X86::RSP));
+    createStackPointerIncrement(Insts.emplace_back(), 528,
+                                /*NoFlagsClobber=*/true);
+    Insts.emplace_back(MCInstBuilder(X86::AND64ri32)
+                           .addReg(X86::RSP)
+                           .addReg(X86::RSP)
+                           .addImm(-16));
+    createSaveToStack(Insts.emplace_back(), X86::RSP, 512, X86::R11, 8);
+    CreateFPStateAccess(X86::FXSAVE64);
+    createCall(Insts.emplace_back(), Target, Ctx);
+    CreateFPStateAccess(X86::FXRSTOR64);
+    createRestoreFromStack(Insts.emplace_back(), X86::RSP, 512, X86::R11, 8);
+    Insts.emplace_back(
+        MCInstBuilder(X86::MOV64rr).addReg(X86::RSP).addReg(X86::R11));
+
+    createPopFlags(Insts.emplace_back(), 8);
+    PopReg(X86::R11);
+    PopReg(X86::R10);
+    PopReg(X86::R9);
+    PopReg(X86::R8);
+    PopReg(X86::RDI);
+    PopReg(X86::RSI);
+    PopReg(X86::RDX);
+    PopReg(X86::RCX);
+    PopReg(X86::RAX);
+    createStackPointerDecrement(Insts.emplace_back(), 128,
+                                /*NoFlagsClobber=*/true);
+    return Insts;
+  }
+
+  InstructionListType
+  createInstrumentedFunctionDispatch(const MCSymbol *TargetLocation,
+                                     MCContext *Ctx) override {
+    InstructionListType Insts(3);
+    Insts[0] = MCInstBuilder(X86::LEA64r)
+                   .addReg(X86::R11)
+                   .addReg(X86::RIP)
+                   .addImm(1)
+                   .addReg(X86::NoRegister)
+                   .addExpr(MCSymbolRefExpr::create(TargetLocation, *Ctx))
+                   .addReg(X86::NoRegister);
+    Insts[1] = MCInstBuilder(X86::ADD64rm)
+                   .addReg(X86::R11)
+                   .addReg(X86::R11)
+                   .addReg(X86::R11)
+                   .addImm(1)
+                   .addReg(X86::NoRegister)
+                   .addImm(0)
+                   .addReg(X86::NoRegister);
+    Insts[2] = MCInstBuilder(X86::JMP64r).addReg(X86::R11);
+    return Insts;
+  }
+
   void createTailCall(MCInst &Inst, const MCSymbol *Target,
                       MCContext *Ctx) override {
     return createDirectCall(Inst, Target, Ctx, /*IsTailCall*/ true);
@@ -2834,31 +3216,48 @@ public:
 
   unsigned getCanonicalBranchCondCode(unsigned CC) const override {
     switch (CC) {
-    default:           return X86::COND_INVALID;
+    default:
+      return X86::COND_INVALID;
 
-    case X86::COND_E:  return X86::COND_E;
-    case X86::COND_NE: return X86::COND_E;
+    case X86::COND_E:
+      return X86::COND_E;
+    case X86::COND_NE:
+      return X86::COND_E;
 
-    case X86::COND_L:  return X86::COND_L;
-    case X86::COND_GE: return X86::COND_L;
+    case X86::COND_L:
+      return X86::COND_L;
+    case X86::COND_GE:
+      return X86::COND_L;
 
-    case X86::COND_LE: return X86::COND_G;
-    case X86::COND_G:  return X86::COND_G;
+    case X86::COND_LE:
+      return X86::COND_G;
+    case X86::COND_G:
+      return X86::COND_G;
 
-    case X86::COND_B:  return X86::COND_B;
-    case X86::COND_AE: return X86::COND_B;
+    case X86::COND_B:
+      return X86::COND_B;
+    case X86::COND_AE:
+      return X86::COND_B;
 
-    case X86::COND_BE: return X86::COND_A;
-    case X86::COND_A:  return X86::COND_A;
+    case X86::COND_BE:
+      return X86::COND_A;
+    case X86::COND_A:
+      return X86::COND_A;
 
-    case X86::COND_S:  return X86::COND_S;
-    case X86::COND_NS: return X86::COND_S;
+    case X86::COND_S:
+      return X86::COND_S;
+    case X86::COND_NS:
+      return X86::COND_S;
 
-    case X86::COND_P:  return X86::COND_P;
-    case X86::COND_NP: return X86::COND_P;
+    case X86::COND_P:
+      return X86::COND_P;
+    case X86::COND_NP:
+      return X86::COND_P;
 
-    case X86::COND_O:  return X86::COND_O;
-    case X86::COND_NO: return X86::COND_O;
+    case X86::COND_O:
+      return X86::COND_O;
+    case X86::COND_NO:
+      return X86::COND_O;
     }
   }
 
@@ -2890,13 +3289,20 @@ public:
   MCPhysReg getIntArgRegister(unsigned ArgNo) const override {
     // FIXME: this should depend on the calling convention.
     switch (ArgNo) {
-    case 0:   return X86::RDI;
-    case 1:   return X86::RSI;
-    case 2:   return X86::RDX;
-    case 3:   return X86::RCX;
-    case 4:   return X86::R8;
-    case 5:   return X86::R9;
-    default:  return getNoRegister();
+    case 0:
+      return X86::RDI;
+    case 1:
+      return X86::RSI;
+    case 2:
+      return X86::RDX;
+    case 3:
+      return X86::RCX;
+    case 4:
+      return X86::R8;
+    case 5:
+      return X86::R9;
+    default:
+      return getNoRegister();
     }
   }
 
@@ -2962,9 +3368,15 @@ public:
     unsigned NewOpcode = 0;
     if (Reg == X86::EFLAGS) {
       switch (Size) {
-      case 2: NewOpcode = X86::PUSHF16;  break;
-      case 4: NewOpcode = X86::PUSHF32;  break;
-      case 8: NewOpcode = X86::PUSHF64;  break;
+      case 2:
+        NewOpcode = X86::PUSHF16;
+        break;
+      case 4:
+        NewOpcode = X86::PUSHF32;
+        break;
+      case 8:
+        NewOpcode = X86::PUSHF64;
+        break;
       default:
         llvm_unreachable("Unexpected size");
       }
@@ -2972,9 +3384,15 @@ public:
       return;
     }
     switch (Size) {
-    case 2: NewOpcode = X86::PUSH16r;  break;
-    case 4: NewOpcode = X86::PUSH32r;  break;
-    case 8: NewOpcode = X86::PUSH64r;  break;
+    case 2:
+      NewOpcode = X86::PUSH16r;
+      break;
+    case 4:
+      NewOpcode = X86::PUSH32r;
+      break;
+    case 8:
+      NewOpcode = X86::PUSH64r;
+      break;
     default:
       llvm_unreachable("Unexpected size");
     }
@@ -2988,9 +3406,15 @@ public:
     unsigned NewOpcode = 0;
     if (Reg == X86::EFLAGS) {
       switch (Size) {
-      case 2: NewOpcode = X86::POPF16;  break;
-      case 4: NewOpcode = X86::POPF32;  break;
-      case 8: NewOpcode = X86::POPF64;  break;
+      case 2:
+        NewOpcode = X86::POPF16;
+        break;
+      case 4:
+        NewOpcode = X86::POPF32;
+        break;
+      case 8:
+        NewOpcode = X86::POPF64;
+        break;
       default:
         llvm_unreachable("Unexpected size");
       }
@@ -2998,9 +3422,15 @@ public:
       return;
     }
     switch (Size) {
-    case 2: NewOpcode = X86::POP16r;  break;
-    case 4: NewOpcode = X86::POP32r;  break;
-    case 8: NewOpcode = X86::POP64r;  break;
+    case 2:
+      NewOpcode = X86::POP16r;
+      break;
+    case 4:
+      NewOpcode = X86::POP32r;
+      break;
+    case 8:
+      NewOpcode = X86::POP64r;
+      break;
     default:
       llvm_unreachable("Unexpected size");
     }
@@ -3020,9 +3450,15 @@ public:
                        unsigned Size) const {
     unsigned int Opcode;
     switch (Size) {
-    case 1: Opcode = X86::ADD8ri; break;
-    case 2: Opcode = X86::ADD16ri; break;
-    case 4: Opcode = X86::ADD32ri; break;
+    case 1:
+      Opcode = X86::ADD8ri;
+      break;
+    case 2:
+      Opcode = X86::ADD16ri;
+      break;
+    case 4:
+      Opcode = X86::ADD32ri;
+      break;
     default:
       llvm_unreachable("Unexpected size");
     }
@@ -3037,9 +3473,15 @@ public:
                                         unsigned Size) const {
     unsigned int Opcode;
     switch (Size) {
-    case 1: Opcode = X86::MOV8ri; break;
-    case 2: Opcode = X86::MOV16ri; break;
-    case 4: Opcode = X86::MOV32ri; break;
+    case 1:
+      Opcode = X86::MOV8ri;
+      break;
+    case 2:
+      Opcode = X86::MOV16ri;
+      break;
+    case 4:
+      Opcode = X86::MOV32ri;
+      break;
     // Writing to a 32-bit register always zeros the upper 32 bits of the
     // full-width register
     case 8:
@@ -3594,7 +4036,7 @@ private:
     Inst.addOperand(
         MCOperand::createExpr(MCSymbolRefExpr::create(Src,
                                                       *Ctx))); // Displacement
-    Inst.addOperand(MCOperand::createReg(X86::NoRegister)); // AddrSegmentReg
+    Inst.addOperand(MCOperand::createReg(X86::NoRegister));    // AddrSegmentReg
   }
 
   void createLea(MCInst &Inst, const MCSymbol *Src, unsigned Reg,
@@ -3608,7 +4050,7 @@ private:
     Inst.addOperand(
         MCOperand::createExpr(MCSymbolRefExpr::create(Src,
                                                       *Ctx))); // Displacement
-    Inst.addOperand(MCOperand::createReg(X86::NoRegister)); // AddrSegmentReg
+    Inst.addOperand(MCOperand::createReg(X86::NoRegister));    // AddrSegmentReg
   }
 };
 

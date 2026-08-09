@@ -29,6 +29,12 @@ enum HeatmapModeKind {
   HM_Optional   // perf2bolt --heatmap
 };
 
+enum class InstrumentationMode : char {
+  None = 0,
+  Counter,
+  FuncProbe,
+};
+
 /// Strategy used to partition blocks into fragments.
 enum SplitFunctionsStrategy : char {
   /// Split each function into a hot and cold fragment using profiling
@@ -100,7 +106,8 @@ extern llvm::cl::opt<bool> HotData;
 extern llvm::cl::opt<bool> HotFunctionsAtEnd;
 extern llvm::cl::opt<bool> HotText;
 extern llvm::cl::opt<bool> Hugify;
-extern llvm::cl::opt<bool> Instrument;
+extern llvm::cl::opt<InstrumentationMode> Instrument;
+extern llvm::cl::opt<std::string> InstrumentFuncProbeFunction;
 extern llvm::cl::opt<std::string> OutputFilename;
 extern llvm::cl::list<std::string> PerfData;
 extern llvm::cl::opt<bool> PrintCacheMetrics;
@@ -118,6 +125,14 @@ extern llvm::cl::opt<bool> StrictMode;
 extern llvm::cl::opt<bool> TimeOpts;
 extern llvm::cl::opt<bool> UseOldText;
 extern llvm::cl::opt<bool> UpdateDebugSections;
+
+inline bool isCounterInstrumentation() {
+  return Instrument == InstrumentationMode::Counter;
+}
+
+inline bool isFuncProbeInstrumentation() {
+  return Instrument == InstrumentationMode::FuncProbe;
+}
 
 // The default verbosity level (0) is pretty terse, level 1 is fairly
 // verbose and usually prints some informational message for every

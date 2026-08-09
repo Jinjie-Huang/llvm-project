@@ -265,10 +265,23 @@ cl::opt<bool> Hugify(
              "--hot-text relies on)."),
     cl::cat(BoltOptCategory));
 
-cl::opt<bool>
-    Instrument("instrument",
-               cl::desc("instrument code to generate accurate profile data"),
-               cl::cat(BoltOptCategory));
+cl::opt<InstrumentationMode> Instrument(
+    "instrument", cl::desc("instrument code"),
+    cl::values(
+        clEnumValN(InstrumentationMode::Counter, "",
+                   "instrument code to generate accurate profile data"),
+        clEnumValN(InstrumentationMode::Counter, "counter",
+                   "instrument code to generate accurate profile data"),
+        clEnumValN(InstrumentationMode::FuncProbe, "func-probe",
+                   "insert a probe call at function entries and exits")),
+    cl::init(InstrumentationMode::None), cl::ValueOptional,
+    cl::cat(BoltOptCategory));
+
+cl::opt<std::string> InstrumentFuncProbeFunction(
+    "instrument-func-probe-function",
+    cl::desc("function called by --instrument=func-probe"),
+    cl::value_desc("function"), cl::init(""), cl::Optional,
+    cl::cat(BoltInstrCategory));
 
 cl::opt<bool> LargeCodeModel(
     "large-code-model",
