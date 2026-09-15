@@ -19,6 +19,7 @@ add_llvm_library(LLVMBOLTPasses
   IndirectCallPromotion.cpp
   Inliner.cpp
   Instrumentation.cpp
+  BRayInstrumentation.cpp
   JTFootprintReduction.cpp
   LongJmp.cpp
   LoopInversionPass.cpp
