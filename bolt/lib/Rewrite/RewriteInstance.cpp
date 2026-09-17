@@ -5956,6 +5956,15 @@ void RewriteInstance::updateELFSymbolTable(
       // If the symbol matched a function that was not emitted, update the
       // corresponding section index but otherwise leave it unchanged.
       if (Function->isEmitted()) {
+        if (IsDynSym && !BC->HasRelocations &&
+            opts::isBRayInstrumentation() &&
+            Function->shouldMoveToNewAddress()) {
+          NewSymbol.st_value = Function->getAddress();
+          NewSymbol.st_size = Function->getSize();
+          NewSymbol.st_shndx = getNewSectionIndex(Symbol.st_shndx);
+          goto registerSymbol;
+        }
+
         NewSymbol.st_value = Function->getOutputAddress();
         NewSymbol.st_size = Function->getOutputSize();
         NewSymbol.st_shndx =
@@ -6006,6 +6015,12 @@ void RewriteInstance::updateELFSymbolTable(
         NewSymbol.st_value = OutputAddress;
         // Force secondary entry points to have zero size.
         NewSymbol.st_size = 0;
+
+        if (!BC->HasRelocations && opts::isBRayInstrumentation() &&
+            Function->shouldMoveToNewAddress()) {
+          NewSymbol.st_shndx = getOutputSectionIndex(OutputAddress);
+          goto registerSymbol;
+        }
 
         // Find fragment containing entrypoint
         FunctionLayout::fragment_const_iterator FF = llvm::find_if(
@@ -6295,7 +6310,9 @@ void RewriteInstance::patchELFAllocatableRelrSection(
       return;
 
     // No fixup needed if symbol address was not changed
-    const uint64_t Addend = getNewFunctionOrDataAddress(Rel.Addend);
+    uint64_t Addend = getNewFunctionAddressForData(Rel.Addend);
+    if (!Addend)
+      Addend = getNewFunctionOrDataAddress(Rel.Addend);
     if (!Addend)
       return;
 
@@ -6431,7 +6448,9 @@ RewriteInstance::patchELFAllocatableRelaSections(ELFObjectFile<ELFT> *File) {
           SymbolIdx = getOutputDynamicSymbolIndex(Symbol);
         } else {
           // Usually this case is used for R_*_(I)RELATIVE relocations
-          const uint64_t Address = getNewFunctionOrDataAddress(Addend);
+          uint64_t Address = getNewFunctionAddressForData(Addend);
+          if (!Address)
+            Address = getNewFunctionOrDataAddress(Addend);
           if (Address)
             Addend = Address;
         }
@@ -6507,7 +6526,7 @@ void RewriteInstance::patchELFGOT(ELFObjectFile<ELFT> *File) {
        GOTEntry < reinterpret_cast<const uint64_t *>(GOTContents.data() +
                                                      GOTContents.size());
        ++GOTEntry) {
-    if (uint64_t NewAddress = getNewFunctionAddress(*GOTEntry)) {
+    if (uint64_t NewAddress = getNewFunctionAddressForData(*GOTEntry)) {
       LLVM_DEBUG(dbgs() << "BOLT-DEBUG: patching GOT entry 0x"
                         << Twine::utohexstr(*GOTEntry) << " with 0x"
                         << Twine::utohexstr(NewAddress) << '\n');
@@ -6742,6 +6761,17 @@ uint64_t RewriteInstance::getNewFunctionAddress(uint64_t OldAddress) {
     Function = Function->getFoldedIntoFunction();
 
   return Function->getOutputAddress();
+}
+
+uint64_t RewriteInstance::getNewFunctionAddressForData(uint64_t OldAddress) {
+  if (!BC->HasRelocations && opts::isBRayInstrumentation()) {
+    if (const BinaryFunction *Function =
+            BC->getBinaryFunctionAtAddress(OldAddress))
+      if (Function->shouldMoveToNewAddress())
+        return OldAddress;
+  }
+
+  return getNewFunctionAddress(OldAddress);
 }
 
 uint64_t RewriteInstance::getNewFunctionOrDataAddress(uint64_t OldAddress) {
