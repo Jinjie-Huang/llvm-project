@@ -9,6 +9,7 @@ set(LLVM_LINK_COMPONENTS
 add_llvm_library(LLVMBOLTRuntimeLibs
   RuntimeLibrary.cpp
   HugifyRuntimeLibrary.cpp
+  BRayRuntimeLibrary.cpp
   InstrumentationRuntimeLibrary.cpp
 
   NO_EXPORT

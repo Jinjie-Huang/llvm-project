@@ -12,6 +12,7 @@
 #include "bolt/Core/BinaryFunction.h"
 #include "bolt/Core/MCPlusBuilder.h"
 #include "bolt/Core/Relocation.h"
+#include "bolt/Utils/CommandLineOpts.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCRegisterInfo.h"
 
@@ -67,6 +68,18 @@ bool X86MCSymbolizer::tryAddingSymbolicOperand(
     const MCOperand &Index = Inst.getOperand(MemOp + X86::AddrIndexReg);
     if (Scale.getImm() != 0 && Index.getReg() != MCRegister::NoRegister)
       return false;
+
+    // In non-relocation mode, code that is not emitted by BOLT retains
+    // references to original function entries. Preserve the same address for
+    // references materialized by moved BRay code. Indirect calls through that
+    // address are redirected by the entry patch to the instrumented body.
+    if (!BC.HasRelocations && opts::isBRayInstrumentation() &&
+        BC.getBinaryFunctionAtAddress(Value)) {
+      MCSymbol *AbsoluteZero =
+          BC.getOrCreateGlobalSymbol(0, "BRayOriginalEntryBase");
+      addOperand(AbsoluteZero, Value);
+      return true;
+    }
 
     const MCSymbol *TargetSymbol;
     uint64_t TargetOffset;

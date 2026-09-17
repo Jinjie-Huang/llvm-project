@@ -250,6 +250,10 @@ private:
   /// \p OldAddress address in the original binary.
   uint64_t getNewFunctionAddress(uint64_t OldAddress);
 
+  /// Return the function address to store in runtime data. In BRay
+  /// non-relocation mode, preserve original entries that contain patches.
+  uint64_t getNewFunctionAddressForData(uint64_t OldAddress);
+
   /// Return address of a function or moved data in the new binary
   /// corresponding to \p OldAddress address in the original binary.
   uint64_t getNewFunctionOrDataAddress(uint64_t OldAddress);
