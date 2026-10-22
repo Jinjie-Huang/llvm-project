@@ -26,6 +26,7 @@ add_llvm_library(LLVMBOLTPasses
   MCF.cpp
   PatchEntries.cpp
   PAuthGadgetScanner.cpp
+  PerformanceAdvisor.cpp
   PettisAndHansen.cpp
   PLTCall.cpp
   PointerAuthCFIAnalyzer.cpp

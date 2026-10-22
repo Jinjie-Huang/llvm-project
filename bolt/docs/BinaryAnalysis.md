@@ -7,15 +7,16 @@ The `llvm-bolt-binary-analysis` tool enables running requested analyses
 on binaries, and generating reports. It does this by building on top of the
 analyses implemented in the BOLT libraries.
 
-For now, the only analysis implemented is validation of Pointer Authentication
-hardening on AArch64, more types of analyses can be added later.
+Implemented analyses include validation of Pointer Authentication hardening on
+AArch64 and profile-correlated performance advice on X86.
 
 ## Contents
 
 1. [Background and motivation](#background-and-motivation)
 2. [Usage](#usage)
-3. [Pointer Authentication validator](#pointer-authentication-validator)
-4. [How to add your own analysis](#how-to-add-your-own-analysis)
+3. [Performance advisor](#performance-advisor)
+4. [Pointer Authentication validator](#pointer-authentication-validator)
+5. [How to add your own analysis](#how-to-add-your-own-analysis)
 
 ## Background and motivation
 
@@ -155,8 +156,8 @@ other relevant BOLT options can generally be passed, see `llvm-bolt --help-hidde
 Incomplete help message is a known issue and is tracked in
 [#176969](https://github.com/llvm/llvm-project/issues/176969).
 
-The only analysis which is currently implemented is validation of a number of
-Pointer Authentication-based hardening schemes such as pac-ret and PAuth ABI.
+The security analysis validates a number of Pointer Authentication-based hardening
+schemes such as pac-ret and PAuth ABI.
 The specific set of gadget kinds which are searched for depends on command line
 options. Each gadget found by PtrAuth gadget scanner results in a plain text
 report printed at the end of the analysis. Furthermore, an attempt is made to
@@ -184,6 +185,36 @@ GS-PAUTH: signing oracle found in function function_name, basic block .LBB016, a
   The instruction is     00010384:      pacda   x0, x1
   The 0 instructions that write to the affected registers after any authentication are:
 ```
+
+## Performance advisor
+
+On X86, `perf-all` selects the `perf-loops` and `perf-spills` scanners:
+
+```sh
+llvm-bolt-binary-analysis binary --perfdata=profile.yaml --scanners=perf-all \
+  --perf-advisor-report=report.json --execution-count-threshold=1000
+```
+
+The default hot threshold is half the average entry count of functions with
+valid profiles, with a minimum of one. `--execution-count-threshold` supplies an
+additional lower bound. Functions with invalid profiles are excluded.
+
+Loop advice uses natural loops, including nested loops, rather than backward
+layout edges. Each loop is reported once with all its latches. Schema version 2
+adds `header_address`, `latches`, loop `entry_count`, and `profile_consistent`;
+the legacy `latch` is null for loops with multiple latches.
+`estimated_trip_count` is a floating-point estimate of header visits per external
+loop entry: `1 + sum(backedge counts) / sum(external entry counts)`.
+Loops starting at the function entry also include the function entry count.
+Missing branch data, inconsistent header flow, or zero entry counts produce
+null rather than a misleading zero or a division by zero.
+
+These are machine-level loop estimates from profile counts, not exact source
+iterations or CPU time. Header-tested loops may include a final condition check,
+and unrolled loops may perform multiple source iterations per header visit.
+Unroll/vectorize recommendations and spill-like stack accesses are heuristic
+candidates, not proof of a compiler missed optimization; confirm them using
+source semantics and compiler optimization remarks.
 
 ## Pointer Authentication validator
 

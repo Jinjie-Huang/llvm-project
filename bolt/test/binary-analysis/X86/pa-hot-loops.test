@@ -1,0 +1,310 @@
+# REQUIRES: system-linux, x86-registered-target
+# RUN: split-file %s %t
+# RUN: llvm-mc -filetype=obj -triple x86_64-unknown-linux %t/main.s -o %t.o
+# RUN: ld.lld %t.o -o %t.exe -q -nostdlib -e counted
+# RUN: llvm-bolt-binary-analysis %t.exe --perfdata=%t/profile.yaml \
+# RUN:   --profile-ignore-hash --scanners=perf-loops --lite=0 \
+# RUN:   --perf-advisor-report=%t/report.json
+# RUN: %python %t/check.py %t/report.json
+# RUN: llvm-bolt-binary-analysis %t.exe --perfdata=%t/profile.yaml \
+# RUN:   --profile-ignore-hash --scanners=perf-loops --lite=0 \
+# RUN:   --execution-count-threshold=4000 --perf-advisor-report=%t/cold.json
+# RUN: FileCheck %s --check-prefix=COLD < %t/cold.json
+# RUN: %python %t/variants.py %t
+# RUN: llvm-bolt-binary-analysis %t.exe --perfdata=%t/fractional.yaml \
+# RUN:   --profile-ignore-hash --scanners=perf-loops --lite=0 \
+# RUN:   --perf-advisor-report=%t/fractional.json
+# RUN: FileCheck %s --check-prefix=FRACTIONAL < %t/fractional.json
+# RUN: llvm-bolt-binary-analysis %t.exe --perfdata=%t/single.yaml \
+# RUN:   --profile-ignore-hash --scanners=perf-loops --lite=0 \
+# RUN:   --perf-advisor-report=%t/single.json
+# RUN: FileCheck %s --check-prefix=SINGLE < %t/single.json
+# RUN: llvm-bolt-binary-analysis %t.exe --perfdata=%t/unknown.yaml \
+# RUN:   --profile-ignore-hash --scanners=perf-loops --lite=0 \
+# RUN:   --perf-advisor-report=%t/unknown.json
+# RUN: FileCheck %s --check-prefix=UNKNOWN < %t/unknown.json
+# RUN: llvm-bolt-binary-analysis %t.exe --perfdata=%t/inconsistent.yaml \
+# RUN:   --profile-ignore-hash --scanners=perf-loops --lite=0 \
+# RUN:   --perf-advisor-report=%t/inconsistent.json
+# RUN: FileCheck %s --check-prefix=INCONSISTENT < %t/inconsistent.json
+# RUN: llvm-bolt-binary-analysis %t.exe --perfdata=%t/basic.fdata \
+# RUN:   --scanners=perf-loops --lite=0 --perf-advisor-report=%t/basic.json
+# RUN: FileCheck %s --check-prefix=BASIC < %t/basic.json
+# RUN: llvm-bolt-binary-analysis %t.exe --perfdata=%t/stale.yaml \
+# RUN:   --profile-ignore-hash --scanners=perf-loops --lite=0 \
+# RUN:   --perf-advisor-report=%t/stale.json
+# RUN: %python %t/check.py %t/stale.json
+# RUN: llvm-bolt-binary-analysis %t.exe --perfdata=%t/overflow.yaml \
+# RUN:   --profile-ignore-hash --scanners=perf-loops --lite=0 \
+# RUN:   --perf-advisor-report=%t/overflow.json
+# RUN: FileCheck %s --check-prefix=INCONSISTENT < %t/overflow.json
+
+# COLD: "hot_threshold": 4000
+# COLD: "hint_count": 0
+# FRACTIONAL: "backedge_count": 950
+# FRACTIONAL: "entry_count": 100
+# FRACTIONAL: "estimated_trip_count": 10.5
+# SINGLE: "backedge_count": 0
+# SINGLE: "entry_count": 100
+# SINGLE: "has_backedge_profile": true
+# SINGLE: "estimated_trip_count": 1
+# UNKNOWN: "backedge_count": 900
+# UNKNOWN: "entry_count": 0
+# UNKNOWN: "estimated_trip_count": null
+# INCONSISTENT: "profile_consistent": false
+# INCONSISTENT: "estimated_trip_count": null
+# BASIC: "has_backedge_profile": false
+# BASIC: "estimated_trip_count": null
+
+#--- main.s
+  .text
+  .globl counted
+  .type counted, @function
+counted:
+  movl $10, %ecx
+.Lcounted:
+  addl %ecx, %eax
+  decl %ecx
+  jne .Lcounted
+  retq
+  .size counted, .-counted
+
+  .globl multi
+  .type multi, @function
+multi:
+  movl $10, %ecx
+.Lmulti:
+  movl (%rdi), %eax
+  movl 4(%rdi), %edx
+  testl %esi, %esi
+  jne .Lalternate
+  decl %ecx
+  jne .Lmulti
+  jmp .Lmulti_exit
+.Lalternate:
+  addl %edx, %eax
+  jne .Lmulti
+.Lmulti_exit:
+  retq
+  .size multi, .-multi
+
+  .globl reordered
+  .type reordered, @function
+reordered:
+  movl $10, %ecx
+  jmp .Lheader
+.Lbody:
+  decl %ecx
+  jne .Lheader
+  retq
+.Lheader:
+  addl %ecx, %eax
+  jmp .Lbody
+  .size reordered, .-reordered
+
+  .globl acyclic
+  .type acyclic, @function
+acyclic:
+  testl %edi, %edi
+  jne .Lhigh
+.Llow:
+  addl %edx, %eax
+  retq
+.Lhigh:
+  movl %esi, %edx
+  jmp .Llow
+  .size acyclic, .-acyclic
+
+  .globl nested
+  .type nested, @function
+nested:
+  movl $3, %ecx
+.Louter:
+  movl $10, %edx
+.Linner:
+  addl %edx, %eax
+  decl %edx
+  jne .Linner
+  decl %ecx
+  jne .Louter
+  retq
+  .size nested, .-nested
+
+  .globl entry
+  .type entry, @function
+entry:
+  decl %ecx
+  jne entry
+  retq
+  .size entry, .-entry
+
+#--- profile.yaml
+---
+header:
+  profile-version: 1
+  binary-name: loops
+  profile-flags: [ lbr ]
+  dfs-order: false
+functions:
+  - name: counted
+    fid: 1
+    hash: 0
+    exec: 100
+    nblocks: 3
+    blocks:
+      - bid: 0
+        insns: 1
+        exec: 100
+        succ: [ { bid: 1, cnt: 100 } ]
+      - bid: 1
+        insns: 3
+        succ: [ { bid: 1, cnt: 900 }, { bid: 2, cnt: 100 } ]
+      - bid: 2
+        insns: 1
+  - name: multi
+    fid: 2
+    hash: 0
+    exec: 100
+    nblocks: 5
+    blocks:
+      - bid: 0
+        insns: 1
+        exec: 100
+        succ: [ { bid: 1, cnt: 100 } ]
+      - bid: 1
+        insns: 4
+        succ: [ { bid: 2, cnt: 500 }, { bid: 3, cnt: 500 } ]
+      - bid: 2
+        insns: 3
+        succ: [ { bid: 1, cnt: 400 }, { bid: 4, cnt: 100 } ]
+      - bid: 3
+        insns: 2
+        succ: [ { bid: 1, cnt: 500 }, { bid: 4, cnt: 0 } ]
+      - bid: 4
+        insns: 1
+  - name: reordered
+    fid: 3
+    hash: 0
+    exec: 100
+    nblocks: 4
+    blocks:
+      - bid: 0
+        insns: 2
+        exec: 100
+        succ: [ { bid: 3, cnt: 100 } ]
+      - bid: 1
+        insns: 2
+        succ: [ { bid: 3, cnt: 900 }, { bid: 2, cnt: 100 } ]
+      - bid: 2
+        insns: 1
+      - bid: 3
+        insns: 2
+        succ: [ { bid: 1, cnt: 1000 } ]
+  - name: acyclic
+    fid: 4
+    hash: 0
+    exec: 100
+    nblocks: 3
+    blocks:
+      - bid: 0
+        insns: 2
+        exec: 100
+        succ: [ { bid: 1, cnt: 50 }, { bid: 2, cnt: 50 } ]
+      - bid: 1
+        insns: 2
+      - bid: 2
+        insns: 2
+        succ: [ { bid: 1, cnt: 50 } ]
+  - name: nested
+    fid: 5
+    hash: 0
+    exec: 100
+    nblocks: 5
+    blocks:
+      - bid: 0
+        insns: 1
+        exec: 100
+        succ: [ { bid: 1, cnt: 100 } ]
+      - bid: 1
+        insns: 1
+        succ: [ { bid: 2, cnt: 300 } ]
+      - bid: 2
+        insns: 3
+        succ: [ { bid: 2, cnt: 2700 }, { bid: 3, cnt: 300 } ]
+      - bid: 3
+        insns: 2
+        succ: [ { bid: 1, cnt: 200 }, { bid: 4, cnt: 100 } ]
+      - bid: 4
+        insns: 1
+  - name: entry
+    fid: 6
+    hash: 0
+    exec: 100
+    nblocks: 2
+    blocks:
+      - bid: 0
+        insns: 2
+        exec: 100
+        succ: [ { bid: 0, cnt: 900 }, { bid: 1, cnt: 100 } ]
+      - bid: 1
+        insns: 1
+
+#--- check.py
+import json
+import sys
+
+with open(sys.argv[1]) as stream:
+    report = json.load(stream)
+assert report["schema_version"] == 2
+assert report["hot_threshold"] == 50, report["hot_threshold"]
+assert report["summary"]["hot_loop_count"] == 6, report["summary"]
+functions = {function["name"]: function for function in report["functions"]}
+assert set(functions) == {"counted", "multi", "reordered", "nested", "entry"}
+for name in ("counted", "multi", "reordered", "entry"):
+    loops = functions[name]["hot_loops"]
+    assert len(loops) == 1, (name, loops)
+    loop = loops[0]
+    assert loop["heat"]["estimated_trip_count"] == 10, (name, loop)
+    assert loop["heat"]["entry_count"] == 100, (name, loop)
+    assert loop["heat"]["backedge_count"] == 900, (name, loop)
+    assert loop["heat"]["profile_consistent"], (name, loop)
+    assert loop["header_address"].startswith("0x")
+multi = functions["multi"]["hot_loops"][0]
+assert len(multi["latches"]) == 2, multi
+assert multi["latch"] is None, multi
+assert multi["shape"]["body_block_count"] == 3, multi
+assert "trip_count" not in multi["likely_blockers"], multi
+assert sorted(
+    loop["heat"]["estimated_trip_count"] for loop in functions["nested"]["hot_loops"]
+) == [3, 10]
+reordered = functions["reordered"]["hot_loops"][0]
+assert reordered["shape"]["body_block_count"] == 2, reordered
+assert int(reordered["latches"][0]["address"], 16) < int(
+    reordered["header_address"], 16
+), reordered
+
+#--- variants.py
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+text = (root / "profile.yaml").read_text()
+counted = text.split("  - name: multi")[0]
+(root / "fractional.yaml").write_text(counted.replace("cnt: 900", "cnt: 950"))
+(root / "single.yaml").write_text(counted.replace("cnt: 900", "cnt: 0"))
+(root / "unknown.yaml").write_text(counted.replace("bid: 1, cnt: 100", "bid: 1, cnt: 0"))
+header = text.split("functions:")[0] + "functions:\n"
+entry = "  - name: entry" + text.split("  - name: entry")[1]
+(root / "inconsistent.yaml").write_text(
+    header + entry.replace("        exec: 100", "        exec: 2000")
+)
+(root / "basic.fdata").write_text("no_lbr\n1 counted 5 100\n")
+(root / "stale.yaml").write_text(
+    text.replace(
+        "  - name: acyclic\n    fid: 4\n    hash: 0\n    exec: 100\n    nblocks: 3",
+        "  - name: acyclic\n    fid: 4\n    hash: 0\n    exec: 100000\n    nblocks: 4",
+    )
+)
+(root / "overflow.yaml").write_text(
+    counted.replace("bid: 1, cnt: 100", "bid: 1, cnt: 18446744073709551614")
+)

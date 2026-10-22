@@ -21,6 +21,7 @@
 #include "bolt/Passes/CacheMetrics.h"
 #include "bolt/Passes/IdenticalCodeFolding.h"
 #include "bolt/Passes/PAuthGadgetScanner.h"
+#include "bolt/Passes/PerformanceAdvisor.h"
 #include "bolt/Passes/ReorderFunctions.h"
 #include "bolt/Profile/BoltAddressTranslation.h"
 #include "bolt/Profile/DataAggregator.h"
@@ -66,7 +67,7 @@
 #include <optional>
 #include <system_error>
 
-#undef  DEBUG_TYPE
+#undef DEBUG_TYPE
 #define DEBUG_TYPE "bolt"
 
 using namespace llvm;
@@ -156,19 +157,15 @@ bool shouldDumpDot(const bolt::BinaryFunction &Function) {
   return false;
 }
 
-static cl::list<std::string>
-ForceFunctionNames("funcs",
-  cl::CommaSeparated,
-  cl::desc("limit optimizations to functions from the list"),
-  cl::value_desc("func1,func2,func3,..."),
-  cl::Hidden,
-  cl::cat(BoltCategory));
+static cl::list<std::string> ForceFunctionNames(
+    "funcs", cl::CommaSeparated,
+    cl::desc("limit optimizations to functions from the list"),
+    cl::value_desc("func1,func2,func3,..."), cl::Hidden, cl::cat(BoltCategory));
 
 static cl::opt<std::string>
-FunctionNamesFile("funcs-file",
-  cl::desc("file with list of functions to optimize"),
-  cl::Hidden,
-  cl::cat(BoltCategory));
+    FunctionNamesFile("funcs-file",
+                      cl::desc("file with list of functions to optimize"),
+                      cl::Hidden, cl::cat(BoltCategory));
 
 static cl::list<std::string> ForceFunctionNamesNR(
     "funcs-no-regex", cl::CommaSeparated,
@@ -180,21 +177,17 @@ static cl::opt<std::string> FunctionNamesFileNR(
     cl::desc("file with list of functions to optimize (non-regex)"), cl::Hidden,
     cl::cat(BoltCategory));
 
-cl::opt<bool>
-KeepTmp("keep-tmp",
-  cl::desc("preserve intermediate .o file"),
-  cl::Hidden,
-  cl::cat(BoltCategory));
+cl::opt<bool> KeepTmp("keep-tmp", cl::desc("preserve intermediate .o file"),
+                      cl::Hidden, cl::cat(BoltCategory));
 
-static cl::opt<unsigned>
-LiteThresholdPct("lite-threshold-pct",
-  cl::desc("threshold (in percent) for selecting functions to process in lite "
-            "mode. Higher threshold means fewer functions to process. E.g "
-            "threshold of 90 means only top 10 percent of functions with "
-            "profile will be processed."),
-  cl::init(0),
-  cl::Hidden,
-  cl::cat(BoltOptCategory));
+static cl::opt<unsigned> LiteThresholdPct(
+    "lite-threshold-pct",
+    cl::desc(
+        "threshold (in percent) for selecting functions to process in lite "
+        "mode. Higher threshold means fewer functions to process. E.g "
+        "threshold of 90 means only top 10 percent of functions with "
+        "profile will be processed."),
+    cl::init(0), cl::ZeroOrMore, cl::Hidden, cl::cat(BoltOptCategory));
 
 static cl::opt<unsigned> LiteThresholdCount(
     "lite-threshold-count",
@@ -247,19 +240,14 @@ static cl::opt<cl::boolOrDefault> RelocationMode(
 
 extern cl::opt<std::string> SaveProfile;
 
-static cl::list<std::string>
-SkipFunctionNames("skip-funcs",
-  cl::CommaSeparated,
-  cl::desc("list of functions to skip"),
-  cl::value_desc("func1,func2,func3,..."),
-  cl::Hidden,
-  cl::cat(BoltCategory));
+static cl::list<std::string> SkipFunctionNames(
+    "skip-funcs", cl::CommaSeparated, cl::desc("list of functions to skip"),
+    cl::value_desc("func1,func2,func3,..."), cl::Hidden, cl::cat(BoltCategory));
 
 static cl::opt<std::string>
-SkipFunctionNamesFile("skip-funcs-file",
-  cl::desc("file with list of functions to skip"),
-  cl::Hidden,
-  cl::cat(BoltCategory));
+    SkipFunctionNamesFile("skip-funcs-file",
+                          cl::desc("file with list of functions to skip"),
+                          cl::Hidden, cl::cat(BoltCategory));
 
 static cl::opt<bool> TrapOldCode(
     "trap-old-code",
@@ -292,10 +280,9 @@ static cl::opt<uint64_t> CustomAllocationVMA(
     cl::Hidden, cl::cat(BoltCategory));
 
 static cl::opt<bool>
-SequentialDisassembly("sequential-disassembly",
-  cl::desc("performs disassembly sequentially"),
-  cl::init(false),
-  cl::cat(BoltOptCategory));
+    SequentialDisassembly("sequential-disassembly",
+                          cl::desc("performs disassembly sequentially"),
+                          cl::init(false), cl::cat(BoltOptCategory));
 
 static cl::opt<bool> WriteBoltInfoSection(
     "bolt-info", cl::desc("write bolt info section in the output binary"),
@@ -314,9 +301,15 @@ static cl::list<GadgetKindBitmask> GadgetScannersToRun(
                    "Signing of untrusted pointers (signing oracles)"),
         clEnumValN(GS_PTRAUTH_AUTH_ORACLES, "ptrauth-auth-oracles",
                    "Authentication oracles"),
+        clEnumValN(GS_PERF_HOT_SPILLS, "perf-spills",
+                   "Hot stack spills correlated with profile data"),
+        clEnumValN(GS_PERF_HOT_LOOPS, "perf-loops",
+                   "Hot loops correlated with profile data"),
 
         clEnumValN(GS_PTRAUTH_ALL_MASK, "ptrauth-all",
                    "All Pointer Authentication scanners"),
+        clEnumValN(GS_PERF_ALL_MASK, "perf-all",
+                   "All profile-correlated performance issue scanners"),
         clEnumValN(GS_ALL_MASK, "all", "All implemented scanners")),
     cl::CommaSeparated, cl::cat(BinaryAnalysisCategory));
 
@@ -651,8 +644,8 @@ Error RewriteInstance::discoverStorage(ELFObjectFile<ELFT> *ELFObjFile) {
   for (const typename ELFT::Phdr &Phdr : PHs) {
     switch (Phdr.p_type) {
     case ELF::PT_LOAD:
-      BC->FirstAllocAddress = std::min(BC->FirstAllocAddress,
-                                       static_cast<uint64_t>(Phdr.p_vaddr));
+      BC->FirstAllocAddress =
+          std::min(BC->FirstAllocAddress, static_cast<uint64_t>(Phdr.p_vaddr));
       NextAvailableAddress =
           std::max(NextAvailableAddress,
                    static_cast<uint64_t>(Phdr.p_vaddr) + Phdr.p_memsz);
@@ -1871,7 +1864,7 @@ void RewriteInstance::registerFragments() {
       }
     }
 
-registerParent:
+  registerParent:
     // No local parent is found, use global parent function.
     if (!ParentAddress)
       if (BinaryData *ParentBD = BC->getBinaryDataByName(ParentName))
@@ -4275,6 +4268,11 @@ void RewriteInstance::runBinaryAnalyses() {
   if (PtrAuthAnalyses)
     Manager.registerPass(std::make_unique<PtrAuthScanner>(PtrAuthAnalyses));
 
+  const auto PerfAnalyses = static_cast<opts::GadgetKindBitmask>(
+      EnabledAnalyses & opts::GS_PERF_ALL_MASK);
+  if (PerfAnalyses)
+    Manager.registerPass(std::make_unique<PerformanceAdvisor>(PerfAnalyses));
+
   BC->logBOLTErrorsAndQuitOnFatal(Manager.runPasses());
 }
 
@@ -4628,7 +4626,8 @@ void RewriteInstance::mapCodeSections(BOLTLinker::SectionMapper MapSection) {
     return Section->getOutputAddress();
   });
   LLVM_DEBUG(dbgs() << "Code sections in the order of output:\n";
-             for (const BinarySection *Section : CodeSections) dbgs()
+             for (const BinarySection *Section
+                  : CodeSections) dbgs()
              << Section->getName() << '\n';);
 
   uint64_t PaddingSize = 0; // size of padding required at the end
@@ -4839,13 +4838,9 @@ void RewriteInstance::mapCodeSectionsInPlace(
     const unsigned Flags = BinarySection::getFlags(/*IsReadOnly=*/true,
                                                    /*IsText=*/true,
                                                    /*IsAllocatable=*/true);
-    BinarySection &Section =
-      BC->registerOrUpdateSection(getBOLTTextSectionName(),
-                                  ELF::SHT_PROGBITS,
-                                  Flags,
-                                  /*Data=*/nullptr,
-                                  NewTextSectionSize,
-                                  16);
+    BinarySection &Section = BC->registerOrUpdateSection(
+        getBOLTTextSectionName(), ELF::SHT_PROGBITS, Flags,
+        /*Data=*/nullptr, NewTextSectionSize, 16);
     Section.setOutputAddress(NewTextSectionStartAddress);
     Section.setOutputFileOffset(
         getFileOffsetForAddress(NewTextSectionStartAddress));
@@ -5177,7 +5172,7 @@ uint64_t appendPadding(raw_pwrite_stream &OS, uint64_t Offset,
   return Offset + PaddingSize;
 }
 
-}
+} // namespace
 
 template <typename ELFT>
 void RewriteInstance::rewriteNoteSections(ELFObjectFile<ELFT> *File) {
@@ -5292,12 +5287,9 @@ void RewriteInstance::finalizeSectionStringTable(ELFObjectFile<ELFT> *File) {
   uint8_t *DataCopy = new uint8_t[SHStrTabSize];
   memset(DataCopy, 0, SHStrTabSize);
   SHStrTab.write(DataCopy);
-  BC->registerOrUpdateNoteSection(".shstrtab",
-                                  DataCopy,
-                                  SHStrTabSize,
+  BC->registerOrUpdateNoteSection(".shstrtab", DataCopy, SHStrTabSize,
                                   /*Alignment=*/1,
-                                  /*IsReadOnly=*/true,
-                                  ELF::SHT_STRTAB);
+                                  /*IsReadOnly=*/true, ELF::SHT_STRTAB);
 }
 
 void RewriteInstance::addBoltInfoSection() {
@@ -5581,11 +5573,9 @@ void RewriteInstance::patchELFSectionHeaderTable(ELFObjectFile<ELFT> *File) {
   std::vector<uint32_t> NewSectionIndex;
   std::vector<ELFShdrTy> OutputSections =
       getOutputSections(File, NewSectionIndex);
-  LLVM_DEBUG(
-    dbgs() << "BOLT-DEBUG: old to new section index mapping:\n";
-    for (uint64_t I = 0; I < NewSectionIndex.size(); ++I)
-      dbgs() << "  " << I << " -> " << NewSectionIndex[I] << '\n';
-  );
+  LLVM_DEBUG(dbgs() << "BOLT-DEBUG: old to new section index mapping:\n";
+             for (uint64_t I = 0; I < NewSectionIndex.size(); ++I) dbgs()
+             << "  " << I << " -> " << NewSectionIndex[I] << '\n';);
 
   // Align starting address for section header table. There's no architecutal
   // need to align this, it is just for pleasant human readability.
@@ -6156,9 +6146,7 @@ void RewriteInstance::patchELFSymTabs(ELFObjectFile<ELFT> *File) {
   NumLocalSymbols = 0;
   updateELFSymbolTable(
       File,
-      /*IsDynSym=*/false,
-      *SymTabSection,
-      NewSectionIndex,
+      /*IsDynSym=*/false, *SymTabSection, NewSectionIndex,
       [&](size_t Offset, const ELFSymTy &Sym) {
         if (Sym.getBinding() == ELF::STB_LOCAL)
           ++NumLocalSymbols;
@@ -6172,19 +6160,15 @@ void RewriteInstance::patchELFSymTabs(ELFObjectFile<ELFT> *File) {
         return Idx;
       });
 
-  BC->registerOrUpdateNoteSection(SecName,
-                                  copyByteArray(NewContents),
+  BC->registerOrUpdateNoteSection(SecName, copyByteArray(NewContents),
                                   NewContents.size(),
                                   /*Alignment=*/1,
-                                  /*IsReadOnly=*/true,
-                                  ELF::SHT_SYMTAB);
+                                  /*IsReadOnly=*/true, ELF::SHT_SYMTAB);
 
-  BC->registerOrUpdateNoteSection(StrSecName,
-                                  copyByteArray(NewStrTab),
+  BC->registerOrUpdateNoteSection(StrSecName, copyByteArray(NewStrTab),
                                   NewStrTab.size(),
                                   /*Alignment=*/1,
-                                  /*IsReadOnly=*/true,
-                                  ELF::SHT_STRTAB);
+                                  /*IsReadOnly=*/true, ELF::SHT_STRTAB);
 }
 
 template <typename ELFT>
@@ -6280,8 +6264,8 @@ void RewriteInstance::patchELFAllocatableRelrSection(
 }
 
 template <typename ELFT>
-void
-RewriteInstance::patchELFAllocatableRelaSections(ELFObjectFile<ELFT> *File) {
+void RewriteInstance::patchELFAllocatableRelaSections(
+    ELFObjectFile<ELFT> *File) {
   using Elf_Rela = typename ELFT::Rela;
   raw_fd_ostream &OS = Out->os();
   const ELFFile<ELFT> &EF = File->getELFFile();
