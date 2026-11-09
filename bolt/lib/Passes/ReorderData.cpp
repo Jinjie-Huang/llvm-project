@@ -18,6 +18,7 @@
 #include "bolt/Passes/ReorderData.h"
 #include "bolt/Utils/CommandLineOpts.h"
 #include "llvm/ADT/MapVector.h"
+#include "llvm/MC/MCValue.h"
 #include <algorithm>
 
 #undef  DEBUG_TYPE
@@ -38,7 +39,8 @@ static cl::opt<bool>
 
 enum ReorderAlgo : char {
   REORDER_COUNT         = 0,
-  REORDER_FUNCS         = 1
+  REORDER_FUNCS         = 1,
+  REORDER_STATIC        = 2
 };
 
 static cl::opt<ReorderAlgo>
@@ -51,7 +53,11 @@ ReorderAlgorithm("reorder-data-algo",
       "sort hot data by read counts"),
     clEnumValN(REORDER_FUNCS,
       "funcs",
-      "sort hot data by hot function usage and count")),
+      "sort hot data by hot function usage and count"),
+    clEnumValN(REORDER_STATIC,
+      "static",
+      "sort hot data by statically identified loads weighted by basic block "
+      "execution counts (x86 only)")),
   cl::cat(BoltOptCategory));
 
 static cl::opt<unsigned>
@@ -218,6 +224,60 @@ void ReorderData::assignMemData(BinaryContext &BC) {
   }
 }
 
+void ReorderData::assignStaticData(BinaryContext &BC) {
+  MCPlusBuilder *MIB = BC.MIB.get();
+  uint64_t TotalCount = 0;
+  uint64_t MatchedCount = 0;
+  for (auto &BFI : BC.getBinaryFunctions()) {
+    const BinaryFunction &BF = BFI.second;
+    if (!shouldOptimize(BF) || !BF.hasValidProfile())
+      continue;
+
+    for (const BinaryBasicBlock &BB : BF) {
+      const uint64_t Count = BB.getKnownExecutionCount();
+      if (!Count)
+        continue;
+
+      for (const MCInst &Inst : BB) {
+        if (!MIB->mayLoad(Inst))
+          continue;
+        TotalCount += Count;
+
+        const auto MemOp = MIB->evaluateX86MemoryOperand(Inst);
+        if (!MemOp || !MemOp->DispExpr || MemOp->IndexRegNum ||
+            MemOp->SegRegNum ||
+            (MemOp->BaseRegNum && !MIB->hasPCRelOperand(Inst)))
+          continue;
+
+        // Only use symbolized references that emission can update after moving
+        // the data. Do not interpret GOT/TLS modifiers as direct object loads.
+        MCValue Value;
+        if (!MemOp->DispExpr->evaluateAsRelocatable(Value, nullptr) ||
+            !Value.getAddSym() || Value.getSubSym() || Value.getSpecifier())
+          continue;
+        BinaryData *BD = BC.getBinaryDataByName(Value.getAddSym()->getName());
+        if (!BD)
+          continue;
+        const uint64_t TargetAddress = BD->getAddress() + Value.getConstant();
+        BD = BD->getAtomicRoot();
+        if (!BD->containsAddress(TargetAddress) ||
+            !isSupported(BD->getSection()) || !filterSymbol(BD) ||
+            !BD->getSize())
+          continue;
+
+        BinaryDataCounts[BD] += Count;
+        MatchedCount += Count;
+      }
+    }
+  }
+
+  BC.outs() << "BOLT-INFO: reorder-data: statically identified " << MatchedCount
+            << "/" << TotalCount
+            << format(" (%.1f%%)",
+                      TotalCount ? 100.0 * MatchedCount / TotalCount : 0.0)
+            << " weighted loads\n";
+}
+
 /// Only consider moving data that is used by the hottest functions with
 /// valid profiles.
 std::pair<DataOrder, unsigned>
@@ -370,15 +430,17 @@ void ReorderData::setSectionOrder(BinaryContext &BC,
 
     BD->setOutputLocation(OutputSection, Offset);
 
-    // reorder sub-symbols
-    for (std::pair<const uint64_t, BinaryData *> &SubBD :
-         BC.getSubBinaryData(BD)) {
-      if (!SubBD.second->isJumpTable()) {
+    // Move descendants with their atomic root. isAncestorOf() follows the
+    // receiver's Parent links, so it must be called on the child.
+    auto SubBD = std::next(BC.BinaryDataMap.find(BD->getAddress()));
+    for (; SubBD != BC.BinaryDataMap.end() && SubBD->second->isAncestorOf(BD);
+         ++SubBD) {
+      if (!SubBD->second->isJumpTable()) {
         uint64_t SubOffset =
-            Offset + SubBD.second->getAddress() - BD->getAddress();
-        LLVM_DEBUG(dbgs() << "BOLT-DEBUG: SubBD " << SubBD.second->getName()
+            Offset + SubBD->second->getAddress() - BD->getAddress();
+        LLVM_DEBUG(dbgs() << "BOLT-DEBUG: SubBD " << SubBD->second->getName()
                           << " @ " << SubOffset << "\n");
-        SubBD.second->setOutputLocation(OutputSection, SubOffset);
+        SubBD->second->setOutputLocation(OutputSection, SubOffset);
       }
     }
 
@@ -390,7 +452,10 @@ void ReorderData::setSectionOrder(BinaryContext &BC,
   OutputSection.reorderContents(NewOrder, opts::ReorderInplace);
 
   BC.outs() << "BOLT-INFO: reorder-data: " << Count << "/" << TotalCount
-            << format(" (%.1f%%)", 100.0 * Count / TotalCount) << " events, "
+            << format(" (%.1f%%)", 100.0 * Count / TotalCount)
+            << (opts::ReorderAlgorithm == opts::REORDER_STATIC
+                    ? " weighted loads, "
+                    : " events, ")
             << Offset << " hot bytes\n";
 }
 
@@ -435,6 +500,9 @@ Error ReorderData::runOnFunctions(BinaryContext &BC) {
   if (!BC.HasRelocations || opts::ReorderData.empty())
     return Error::success();
 
+  if (opts::ReorderAlgorithm == opts::REORDER_STATIC && !BC.isX86())
+    return createFatalBOLTError("static data reordering is only supported on x86");
+
   // For now
   if (opts::JumpTables > JTS_BASIC) {
     BC.outs() << "BOLT-WARNING: jump table support must be basic for "
@@ -442,7 +510,10 @@ Error ReorderData::runOnFunctions(BinaryContext &BC) {
     return Error::success();
   }
 
-  assignMemData(BC);
+  if (opts::ReorderAlgorithm == opts::REORDER_STATIC)
+    assignStaticData(BC);
+  else
+    assignMemData(BC);
 
   std::vector<BinarySection *> Sections;
 
@@ -476,14 +547,19 @@ Error ReorderData::runOnFunctions(BinaryContext &BC) {
     DataOrder Order;
     unsigned SplitPointIdx;
 
-    if (opts::ReorderAlgorithm == opts::ReorderAlgo::REORDER_COUNT) {
-      BC.outs() << "BOLT-INFO: reorder-sections: ordering data by count\n";
+    if (opts::ReorderAlgorithm != opts::REORDER_FUNCS) {
+      BC.outs() << "BOLT-INFO: reorder-sections: ordering data by "
+                << (opts::ReorderAlgorithm == opts::REORDER_STATIC ? "static"
+                                                                   : "count")
+                << "\n";
       std::tie(Order, SplitPointIdx) = sortedByCount(BC, *Section);
     } else {
       BC.outs() << "BOLT-INFO: reorder-sections: ordering data by funcs\n";
       std::tie(Order, SplitPointIdx) =
           sortedByFunc(BC, *Section, BC.getBinaryFunctions());
     }
+    if (opts::ReorderAlgorithm == opts::REORDER_STATIC && !SplitPointIdx)
+      continue;
     auto SplitPoint = Order.begin() + SplitPointIdx;
 
     if (opts::PrintReorderedData)

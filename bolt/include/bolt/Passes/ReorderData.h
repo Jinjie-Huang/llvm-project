@@ -26,6 +26,9 @@ private:
 
   void assignMemData(BinaryContext &BC);
 
+  /// Estimate data load counts from static references and basic block profiles.
+  void assignStaticData(BinaryContext &BC);
+
   /// Sort symbols by memory profiling data execution count.  The output
   /// is a vector of [address,count] pairs.
   std::pair<DataOrder, unsigned>

@@ -771,6 +771,11 @@
   Algorithm used to reorder data sections
   - `count`: sort hot data by read counts
   - `funcs`: sort hot data by hot function usage and count
+  - `static`: sort hot data by statically identified load counts per byte,
+    weighted by basic block execution counts (x86 only). Uses an execution
+    profile without requiring memory samples. Supports direct RIP-relative and
+    absolute loads with symbolized operands; register-indirect, indexed, TLS,
+    and unsymbolized absolute accesses are excluded.
 
 - `--reorder-data-inplace`
 
