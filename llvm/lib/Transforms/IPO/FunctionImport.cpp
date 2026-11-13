@@ -1872,6 +1872,10 @@ void llvm::thinLTOFinalizeInModule(Module &TheModule,
                                    bool PropagateAttrs) {
   llvm::TimeTraceScope timeScope("ThinLTO finalize in module");
   DenseSet<Comdat *> NonPrevailingComdats;
+  DenseSet<const GlobalValue *> IFuncResolvers;
+  for (const GlobalIFunc &I : TheModule.ifuncs())
+    I.applyAlongResolverPath(
+        [&](const GlobalValue &GV) { IFuncResolvers.insert(&GV); });
   auto FinalizeInModule = [&](GlobalValue &GV, bool Propagate = false) {
     // See if the global summary analysis computed a new resolved linkage.
     const auto &GS = DefinedGlobals.find(GV.getGUIDOrFallback());
@@ -1915,6 +1919,15 @@ void llvm::thinLTOFinalizeInModule(Module &TheModule,
 
     if (NewLinkage == GV.getLinkage())
       return;
+
+    // Ifuncs have no summaries, so keep their non-prevailing resolvers as
+    // definitions. Remove the comdat to retain ifuncs unique to this module.
+    if (GlobalValue::isAvailableExternallyLinkage(NewLinkage) &&
+        IFuncResolvers.count(&GV)) {
+      if (auto *GO = dyn_cast<GlobalObject>(&GV))
+        GO->setComdat(nullptr);
+      return;
+    }
 
     // Check for a non-prevailing def that has interposable linkage
     // (e.g. non-odr weak or linkonce). In that case we can't simply
